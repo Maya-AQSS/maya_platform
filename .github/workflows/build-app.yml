@@ -1,0 +1,193 @@
+name: build-app
+# Workflow REUTILIZABLE: construye y publica las 4 imágenes de una app Maya
+# (api, worker, reverb, frontend) y su chart Helm como artefacto OCI en el
+# registry local. Cada app lo invoca desde su .github/workflows/build-and-publish.yml:
+#
+#   jobs:
+#     publish:
+#       uses: Maya-AQSS/maya_platform/.github/workflows/build-app.yml@main
+#       with: { app: maya-audit, version: "${{ inputs.version }}" }
+#       secrets: inherit
+#
+# Corre en el runner self-hosted `local-builder` (VM 110). Sube por 127.0.0.1:5000;
+# k3s descarga las mismas imágenes por 10.224.237.240:5000 (mismo registry).
+#
+# Secrets (org Maya-AQSS): REGISTRY_USERNAME, REGISTRY_PASSWORD.
+# Opcional: COMPOSER_AUTH (auth.json en JSON) si algún paquete viene de un repo privado.
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: "Nombre de la app (maya-audit, maya-dms…). Prefijo de las imágenes y del chart."
+        required: true
+        type: string
+      version:
+        description: "Versión semver sin 'v'. Vacío = se toma del tag vX.Y.Z que disparó el workflow."
+        required: false
+        type: string
+        default: ""
+      php_base:
+        description: "Imagen base del backend dentro del registry (maya/…)."
+        required: false
+        type: string
+        default: "maya/php-base:8.4"
+      web_base:
+        description: "Imagen base del frontend dentro del registry (maya/…)."
+        required: false
+        type: string
+        default: "maya/web-base:1.29"
+      chart_path:
+        description: "Ruta del chart Helm de la app. Vacío = no se publica chart."
+        required: false
+        type: string
+        default: "deploy/helm"
+      vite_args:
+        description: "TRANSITORIO: build-args VITE_* (una por línea, CLAVE=valor) mientras la SPA no lea /config.js."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+      COMPOSER_AUTH:
+        required: false
+
+env:
+  REGISTRY: 127.0.0.1:5000
+  DOCKER_BUILDKIT: "1"
+
+jobs:
+  build-and-publish:
+    runs-on: [self-hosted, local-builder]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolver versión
+        run: |
+          set -eu
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
+            || { echo "::error::versión '$VERSION' no es semver (X.Y.Z)"; exit 1; }
+          {
+            echo "VERSION=$VERSION"
+            echo "SHA_TAG=sha-${GITHUB_SHA::8}"
+            echo "APP=${{ inputs.app }}"
+            echo "IMG=127.0.0.1:5000/maya/${{ inputs.app }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Login en el registry (docker + helm OCI)
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login "$REGISTRY" --plain-http -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Imágenes base
+        run: |
+          docker pull "$REGISTRY/${{ inputs.php_base }}"
+          docker pull "$REGISTRY/${{ inputs.web_base }}"
+
+      - name: Build backend (api, worker, reverb)
+        env:
+          COMPOSER_AUTH: ${{ secrets.COMPOSER_AUTH }}
+        run: |
+          set -eu
+          SECRET_ARGS=""
+          if [ -n "${COMPOSER_AUTH:-}" ]; then
+            SECRET_ARGS="--secret id=composer_auth,env=COMPOSER_AUTH"
+          fi
+          LABELS="--label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }} \
+                  --label org.opencontainers.image.revision=${{ github.sha }} \
+                  --label org.opencontainers.image.version=$VERSION \
+                  --label org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          for t in api worker reverb; do
+            # shellcheck disable=SC2086
+            docker build -f backend/Dockerfile.prod --target "$t" $SECRET_ARGS $LABELS \
+              --build-arg "MAYA_PHP_BASE=$REGISTRY/${{ inputs.php_base }}" \
+              -t "$IMG-$t:$VERSION" -t "$IMG-$t:$SHA_TAG" backend
+          done
+
+      - name: Build frontend
+        run: |
+          set -eu
+          VITE_ARGS=""
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            VITE_ARGS="$VITE_ARGS --build-arg $line"
+          done <<'EOF'
+          ${{ inputs.vite_args }}
+          EOF
+          # shellcheck disable=SC2086
+          docker build -f frontend/Dockerfile.prod $VITE_ARGS \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --build-arg "MAYA_WEB_BASE=$REGISTRY/${{ inputs.web_base }}" \
+            -t "$IMG-frontend:$VERSION" -t "$IMG-frontend:$SHA_TAG" frontend
+
+      # Las imágenes arrancan como en k8s: sin root y con raíz de solo lectura.
+      - name: Smoke tests
+        run: |
+          set -eu
+          RO="--read-only --tmpfs /tmp:uid=82,gid=82 --tmpfs /var/www/html/storage:uid=82,gid=82 --tmpfs /var/www/html/bootstrap/cache:uid=82,gid=82"
+          ENV="-e APP_KEY=base64:$(head -c 32 /dev/urandom | base64) -e APP_ENV=production -e CACHE_STORE=array -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync -e BROADCAST_CONNECTION=log -e JWT_AUDIENCE=smoke -e RABBITMQ_USER=smoke -e RABBITMQ_PASSWORD=smoke -e DB_PASSWORD=smoke -e LOG_MGMT_DB_PASSWORD=smoke"
+          # shellcheck disable=SC2086
+          docker run --rm $RO $ENV "$IMG-worker:$VERSION" worker --version | grep -q 'Laravel Framework'
+          test "$(docker run --rm "$IMG-worker:$VERSION" exec id -u)" = "82"
+          # shellcheck disable=SC2086
+          C=$(docker run -d --rm $RO $ENV -p 18081:8080 "$IMG-api:$VERSION")
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:18081/api/v1/health/live | grep -q '"ok"' || { docker logs "$C"; docker stop "$C"; exit 1; }
+          docker stop -t 5 "$C" >/dev/null
+          F=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18082:8080 "$IMG-frontend:$VERSION")
+          sleep 2
+          curl -fsS http://127.0.0.1:18082/healthz >/dev/null
+          curl -fsS http://127.0.0.1:18082/ | grep -q '/assets/'
+          docker stop -t 3 "$F" >/dev/null
+
+      - name: Push de las imágenes
+        run: |
+          for t in api worker reverb frontend; do
+            docker push "$IMG-$t:$VERSION"
+            docker push "$IMG-$t:$SHA_TAG"
+          done
+
+      - name: Package & push del chart Helm (OCI)
+        if: inputs.chart_path != ''
+        run: |
+          set -eu
+          # maya-common se resuelve desde el registry (Chart.yaml → oci://.../charts).
+          helm dependency update "${{ inputs.chart_path }}" --plain-http
+          helm lint "${{ inputs.chart_path }}" --set "image.tag=$VERSION"
+          CHART=$(helm show chart "${{ inputs.chart_path }}" | awk '/^name:/{print $2}')
+          helm package "${{ inputs.chart_path }}" --version "$VERSION" --app-version "$VERSION" -d /tmp/chart
+          helm push --plain-http "/tmp/chart/${CHART}-${VERSION}.tgz" "oci://$REGISTRY/charts"
+          echo "CHART=$CHART" >> "$GITHUB_ENV"
+
+      - name: Limpiar imágenes locales antiguas
+        if: success()
+        run: |
+          for t in api worker reverb frontend; do
+            docker images "$IMG-$t" --format '{{.ID}} {{.CreatedAt}}' | sort -k2 -r | tail -n +7 | awk '{print $1}' | xargs -r docker rmi --force || true
+          done
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## $APP $VERSION"
+            echo
+            echo "| Artefacto | Referencia |"
+            echo "|---|---|"
+            for t in api worker reverb frontend; do
+              echo "| $t | \`maya/$APP-$t:$VERSION\` (\`$SHA_TAG\`) |"
+            done
+            [ -n "${CHART:-}" ] && echo "| chart | \`oci://<registry>/charts/$CHART:$VERSION\` |"
+            echo
+            echo "Despliegue: \`MAYA_DEPLOY_APPS=1 MAYA_$(echo "$APP" | sed 's/^maya-//' | tr a-z- A-Z_)_VERSION=$VERSION helmfile apply --selector name=$APP\`"
+          } >> "$GITHUB_STEP_SUMMARY"
