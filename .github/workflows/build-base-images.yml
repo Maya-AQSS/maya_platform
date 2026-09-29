@@ -1,0 +1,102 @@
+name: build-base-images
+# Construye y publica en el registry local las imágenes base de Maya
+# (docker/php-base → maya/php-base:8.4 y :8.4-pdf; docker/web-base → maya/web-base:1.29).
+#
+# Corre en el runner self-hosted `local-builder` (VM 110, registry en 127.0.0.1:5000).
+# Se lanza al cambiar docker/** en main, a mano, y una vez al mes para recoger los
+# parches de seguridad de Alpine, PHP y nginx. Las apps adoptan la base nueva al
+# reconstruirse con --build-arg MAYA_PHP_BASE / MAYA_WEB_BASE.
+#
+# Secrets (org Maya-AQSS): REGISTRY_USERNAME, REGISTRY_PASSWORD.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/**"
+      - ".github/workflows/build-base-images.yml"
+  schedule:
+    - cron: "0 6 1-7 * 1"   # primer lunes de cada mes, 06:00 UTC
+  workflow_dispatch:
+
+env:
+  REGISTRY: 127.0.0.1:5000
+  PHP_TAG: "8.4"
+  NGINX_TAG: "1.29"
+  DOCKER_BUILDKIT: "1"
+
+jobs:
+  build-and-push:
+    runs-on: [self-hosted, local-builder]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fecha de la build (tag inmutable)
+        run: echo "STAMP=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+
+      - name: Registry disponible
+        run: curl -fsS "http://$REGISTRY/v2/" -u "${{ secrets.REGISTRY_USERNAME }}:${{ secrets.REGISTRY_PASSWORD }}" >/dev/null
+
+      - name: Login en el registry
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Build php-base
+        run: |
+          docker build --pull --target base \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$REGISTRY/maya/php-base:$PHP_TAG-$STAMP" \
+            -t "$REGISTRY/maya/php-base:$PHP_TAG" \
+            -t "maya/php-base:$PHP_TAG" \
+            docker/php-base
+          docker build --target pdf \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            -t "$REGISTRY/maya/php-base:$PHP_TAG-pdf-$STAMP" \
+            -t "$REGISTRY/maya/php-base:$PHP_TAG-pdf" \
+            docker/php-base
+
+      - name: Build web-base
+        run: |
+          docker build --pull \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$REGISTRY/maya/web-base:$NGINX_TAG-$STAMP" \
+            -t "$REGISTRY/maya/web-base:$NGINX_TAG" \
+            docker/web-base
+
+      # Los Dockerfile ya validan nginx -t, php-fpm -t y las extensiones; aquí
+      # comprobamos que las imágenes arrancan como en k8s (sin root, raíz de solo lectura).
+      - name: Smoke tests
+        run: |
+          set -eu
+          docker run --rm --read-only --tmpfs /tmp:uid=82,gid=82 "$REGISTRY/maya/php-base:$PHP_TAG-$STAMP" exec php -v | head -1
+          test "$(docker run --rm "$REGISTRY/maya/php-base:$PHP_TAG-$STAMP" exec id -u)" = "82"
+          docker run --rm "$REGISTRY/maya/php-base:$PHP_TAG-pdf-$STAMP" exec weasyprint --version
+          C=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18080:8080 -e MAYA_PUBLIC_SMOKE=ok "$REGISTRY/maya/web-base:$NGINX_TAG-$STAMP")
+          sleep 2
+          curl -fsS http://127.0.0.1:18080/healthz
+          curl -fsS http://127.0.0.1:18080/config.js | grep -q '"SMOKE": "ok"'
+          docker stop -t 3 "$C" >/dev/null
+
+      - name: Push
+        run: |
+          for t in "php-base:$PHP_TAG-$STAMP" "php-base:$PHP_TAG" \
+                   "php-base:$PHP_TAG-pdf-$STAMP" "php-base:$PHP_TAG-pdf" \
+                   "web-base:$NGINX_TAG-$STAMP" "web-base:$NGINX_TAG"; do
+            docker push "$REGISTRY/maya/$t"
+          done
+
+      - name: Resumen
+        if: always()
+        run: |
+          {
+            echo "## Imágenes base publicadas"
+            echo
+            echo "| Imagen | Tag inmutable | Tag flotante |"
+            echo "|---|---|---|"
+            echo "| maya/php-base | \`$PHP_TAG-$STAMP\` | \`$PHP_TAG\` |"
+            echo "| maya/php-base (pdf) | \`$PHP_TAG-pdf-$STAMP\` | \`$PHP_TAG-pdf\` |"
+            echo "| maya/web-base | \`$NGINX_TAG-$STAMP\` | \`$NGINX_TAG\` |"
+            echo
+            echo "Para las apps: \`--build-arg MAYA_PHP_BASE=<registry>/maya/php-base:$PHP_TAG-$STAMP\`"
+          } >> "$GITHUB_STEP_SUMMARY"

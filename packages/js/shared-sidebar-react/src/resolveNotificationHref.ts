@@ -27,7 +27,10 @@ export interface BrowserLocation {
  * `location`) para ser testeable y reutilizable dentro del paquete compartido.
  */
 export function peerOrigin(targetService: string, loc: BrowserLocation): string {
-  const { protocol, hostname } = loc
+  const { protocol } = loc
+  // En producción (`api.<app>.<dominio>`) el navegador nunca corre en el host api,
+  // pero por robustez se ignora esa etiqueta: las SPAs siempre son `<app>.<dominio>`.
+  const hostname = loc.hostname.replace(/^api\./i, '')
 
   // Fallback para entornos sin sub-dominio (ej. 'localhost').
   const firstDot = hostname.indexOf('.')

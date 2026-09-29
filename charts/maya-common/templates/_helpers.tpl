@@ -1,17 +1,12 @@
 {{/*
-  maya-common — shared name/label/helper templates.
-
-  All helpers operate on the *consumer* chart context (.Chart, .Release,
-  .Values) so the library can be included as `{{ include "maya-common.X" . }}`
-  from any consumer template.
+  maya-common — nombres, etiquetas y piezas compartidas.
+  Todos los helpers reciben el contexto del chart consumidor (.Chart, .Release, .Values).
 */}}
 
-{{/* Base name (overridable). */}}
 {{- define "maya-common.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* Full release name (release-name prefixed). */}}
 {{- define "maya-common.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
@@ -25,16 +20,14 @@
 {{- end -}}
 {{- end -}}
 
-{{/* chart label (Helm convention). */}}
 {{- define "maya-common.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* Standard labels applied to every resource. */}}
 {{- define "maya-common.labels" -}}
 helm.sh/chart: {{ include "maya-common.chart" . }}
 {{ include "maya-common.selectorLabels" . }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- with .Values.commonLabels }}
 {{ toYaml . }}
@@ -46,7 +39,7 @@ app.kubernetes.io/name: {{ include "maya-common.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{/* Per-component variants. Call with dict "root" . "component" "backend". */}}
+{{/* Variantes por componente. Uso: (dict "root" . "component" "api") */}}
 {{- define "maya-common.componentLabels" -}}
 {{ include "maya-common.labels" .root }}
 app.kubernetes.io/component: {{ .component }}
@@ -57,50 +50,99 @@ app.kubernetes.io/component: {{ .component }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
-{{/*
-  Stable per-component name. Pattern:
-    <release-fullname>-<component>
-  Used for Service / Deployment names. Predictable for east-west DNS.
-*/}}
+{{/* <nombre completo>-<componente>: nombres estables para Deployments y Services. */}}
 {{- define "maya-common.componentName" -}}
 {{- printf "%s-%s" (include "maya-common.fullname" .root) .component | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* Secret name resolver (external override or chart-managed). */}}
-{{- define "maya-common.secretName" -}}
-{{- if and .Values.secret .Values.secret.externalName -}}
-{{- .Values.secret.externalName -}}
-{{- else if and .Values.secret .Values.secret.name -}}
-{{- .Values.secret.name -}}
-{{- else -}}
-{{- printf "%s-secret" (include "maya-common.fullname" .) -}}
+{{/*
+  Referencia de imagen: <registry>/<repository>-<componente>:<tag>.
+  Uso: (dict "root" . "component" "worker"). `image.tag` es obligatorio.
+*/}}
+{{- define "maya-common.image" -}}
+{{- $v := .root.Values -}}
+{{- $tag := $v.image.tag -}}
+{{- if not $tag -}}
+{{- fail "image.tag es obligatorio (misma versión semver que el chart)" -}}
 {{- end -}}
+{{- printf "%s/%s-%s:%s" $v.image.registry $v.image.repository .component $tag -}}
+{{- end -}}
+
+{{- define "maya-common.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- default (include "maya-common.fullname" .) .Values.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "maya-common.vaultRole" -}}
+{{- default (include "maya-common.fullname" .) .Values.vault.role -}}
+{{- end -}}
+
+{{- define "maya-common.vaultSecretPath" -}}
+{{- default (printf "secret/data/%s" (include "maya-common.fullname" .)) .Values.vault.secretPath -}}
 {{- end -}}
 
 {{/*
-  Build a fully-qualified image reference for a component.
-  Args: dict "root" .Values "componentImage" .Values.backend.image.
-  Requires `image.tag` (root) or a per-component override.
+  Anotaciones del Vault Agent Injector. Renderiza /vault/secrets/config con
+  `export CLAVE="valor"` por cada clave; el entrypoint de la imagen lo carga.
+  pre-populate-only: solo init container (sin sidecar), así los Jobs terminan.
 */}}
-{{- define "maya-common.image" -}}
-{{- $reg := .root.image.registry -}}
-{{- $repo := default .root.image.repository .componentImage.repository -}}
-{{- $tag := default .root.image.tag .componentImage.tag -}}
-{{- if not $tag -}}
-{{- fail "image.tag is required — set with `--set image.tag=<git-sha>`" -}}
-{{- end -}}
-{{- printf "%s/%s:%s" $reg $repo $tag -}}
+{{- define "maya-common.vaultAnnotations" -}}
+{{- if .Values.vault.enabled }}
+vault.hashicorp.com/agent-inject: "true"
+vault.hashicorp.com/agent-pre-populate-only: "true"
+vault.hashicorp.com/agent-init-first: "true"
+vault.hashicorp.com/role: {{ include "maya-common.vaultRole" . | quote }}
+vault.hashicorp.com/agent-inject-secret-config: {{ include "maya-common.vaultSecretPath" . | quote }}
+vault.hashicorp.com/agent-run-as-user: "82"
+vault.hashicorp.com/agent-run-as-group: "82"
+{{- with .Values.vault.agentResources }}
+vault.hashicorp.com/agent-requests-cpu: {{ .requests.cpu | quote }}
+vault.hashicorp.com/agent-requests-mem: {{ .requests.memory | quote }}
+vault.hashicorp.com/agent-limits-cpu: {{ .limits.cpu | quote }}
+vault.hashicorp.com/agent-limits-mem: {{ .limits.memory | quote }}
+{{- end }}
+vault.hashicorp.com/agent-inject-template-config: |
+{{ printf "  {{- with secret %s -}}" (include "maya-common.vaultSecretPath" . | quote) }}
+{{- range .Values.vault.keys }}
+{{ printf "  export %s=\"{{ .Data.data.%s }}\"" . . }}
+{{- end }}
+{{ printf "  {{- end -}}" }}
+{{- end }}
 {{- end -}}
 
-{{/* envFrom shared between backend / worker / scheduler / reverb / migrate. */}}
+{{/* Anotaciones comunes de los pods backend: checksum de config + Vault. */}}
+{{- define "maya-common.backendPodAnnotations" -}}
+checksum/config: {{ include "maya-common.configmap" . | sha256sum }}
+{{- include "maya-common.vaultAnnotations" . }}
+{{- end -}}
+
+{{/* envFrom de los backends: ConfigMap siempre; Secret solo sin Vault. */}}
 {{- define "maya-common.envFrom" -}}
 - configMapRef:
     name: {{ include "maya-common.fullname" . }}-config
+{{- if not .Values.vault.enabled }}
 - secretRef:
-    name: {{ include "maya-common.secretName" . }}
+    name: {{ required "secret.externalName es obligatorio con vault.enabled=false" .Values.secret.externalName }}
+{{- end }}
 {{- end -}}
 
-{{/* Graceful preStop sleep. */}}
+{{/* Misma configuración que el ConfigMap, como lista `env` (para el Job de migración). */}}
+{{- define "maya-common.envInline" -}}
+{{- range $k, $v := .Values.config }}
+- name: {{ $k }}
+  value: {{ $v | toString | quote }}
+{{- end }}
+- name: APP_ENV
+  value: "production"
+- name: APP_DEBUG
+  value: "false"
+- name: SESSION_SECURE_COOKIE
+  value: "true"
+{{- end -}}
+
 {{- define "maya-common.preStop" -}}
 preStop:
   exec:
@@ -108,49 +150,49 @@ preStop:
 {{- end -}}
 
 {{/*
-  Writable runtime volumes required when readOnlyRootFilesystem: true.
-  Mounts cover Laravel's writable paths inside the image.
+  Rutas escribibles con readOnlyRootFilesystem (contrato de maya/php-base):
+  storage/, bootstrap/cache y /tmp como emptyDir; el entrypoint recrea la
+  estructura de storage/ al arrancar. El PVC de ficheros (storage.*) se monta
+  dentro de storage/app.
 */}}
 {{- define "maya-common.runtimeVolumes" -}}
-- name: storage-framework
+- name: storage
   emptyDir: {}
 - name: bootstrap-cache
   emptyDir: {}
-- name: storage-logs
-  emptyDir: {}
 - name: tmp
   emptyDir: {}
+{{- if .Values.storage.enabled }}
+- name: media
+  persistentVolumeClaim:
+    claimName: {{ .Values.storage.existingClaim | default (printf "%s-media" (include "maya-common.fullname" .)) }}
+{{- end }}
 {{- end -}}
 
 {{- define "maya-common.runtimeVolumeMounts" -}}
-- name: storage-framework
-  mountPath: /var/www/html/storage/framework
+- name: storage
+  mountPath: /var/www/html/storage
 - name: bootstrap-cache
   mountPath: /var/www/html/bootstrap/cache
-- name: storage-logs
-  mountPath: /var/www/html/storage/logs
 - name: tmp
   mountPath: /tmp
-{{- end -}}
-
-{{/*
-  Optional media PVC mount (DMS only). When storage.enabled=true, the PVC is
-  mounted at `…/storage/app/media` via subPath. Empty otherwise so call sites
-  can render `{{- include "maya-common.mediaVolumeMounts" . | nindent 12 }}`
-  unconditionally.
-*/}}
-{{- define "maya-common.mediaVolumes" -}}
-{{- if and .Values.storage .Values.storage.enabled }}
+{{- if .Values.storage.enabled }}
 - name: media
-  persistentVolumeClaim:
-    claimName: {{ include "maya-common.fullname" . }}-media
+  mountPath: {{ .Values.storage.mountPath }}
+  {{- with .Values.storage.subPath }}
+  subPath: {{ . }}
+  {{- end }}
 {{- end }}
 {{- end -}}
 
-{{- define "maya-common.mediaVolumeMounts" -}}
-{{- if and .Values.storage .Values.storage.enabled }}
-- name: media
-  mountPath: /var/www/html/storage/app/media
-  subPath: media
+{{/* Bloque común del spec de pod de los backends. */}}
+{{- define "maya-common.backendPodSpecCommon" -}}
+{{- with .Values.image.pullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
 {{- end }}
+serviceAccountName: {{ include "maya-common.serviceAccountName" . }}
+automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+securityContext:
+  {{- toYaml .Values.podSecurityContext | nindent 2 }}
 {{- end -}}

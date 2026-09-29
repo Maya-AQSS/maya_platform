@@ -1,50 +1,51 @@
 {{/*
-  Reverb Deployment (WebSockets / Pusher protocol).
-  Singleton — scale horizontally only with the Redis broadcaster.
+  Deployment reverb: imagen *-reverb (WebSocket en 8080). Los backends publican
+  en el Service interno (REVERB_HOST=<nombre completo>-reverb); el navegador
+  entra por el Ingress de la api en ingress.reverbPath.
 */}}
 {{- define "maya-common.reverb" -}}
 {{- if .Values.reverb.enabled -}}
-{{- $component := "reverb" -}}
+{{- $c := "reverb" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "maya-common.componentName" (dict "root" . "component" $component) }}
+  name: {{ include "maya-common.componentName" (dict "root" . "component" $c) }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "maya-common.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+    {{- include "maya-common.componentLabels" (dict "root" . "component" $c) | nindent 4 }}
 spec:
-  replicas: {{ .Values.reverb.replicas | default 1 }}
+  replicas: {{ .Values.reverb.replicas }}
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+      {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $c) | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $component) | nindent 8 }}
+        {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $c) | nindent 8 }}
       annotations:
-        checksum/config: {{ include "maya-common.configmap" . | sha256sum }}
+        {{- include "maya-common.backendPodAnnotations" . | nindent 8 }}
     spec:
-      {{- with .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ .Values.reverbTerminationGracePeriodSeconds | default 60 }}
+      {{- include "maya-common.backendPodSpecCommon" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.reverb.terminationGracePeriodSeconds }}
       containers:
         - name: reverb
-          image: {{ include "maya-common.image" (dict "root" .Values "componentImage" .Values.reverb.image) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
-          env:
-            - name: CONTAINER_ROLE
-              value: "reverb"
+          image: {{ include "maya-common.image" (dict "root" . "component" "reverb") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["reverb"]
           envFrom:
             {{- include "maya-common.envFrom" . | nindent 12 }}
+          env:
+            - name: MAYA_REVERB_PORT
+              value: {{ .Values.reverb.port | quote }}
+            {{- with .Values.reverb.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - name: ws
-              containerPort: {{ .Values.reverb.containerPort | default 8080 }}
+              containerPort: {{ .Values.reverb.port }}
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.reverb.livenessProbe | nindent 12 }}

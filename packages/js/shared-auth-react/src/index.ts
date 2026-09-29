@@ -9,6 +9,7 @@ export * from './sessionOverrides'
 export * from './data'
 export { useAuth } from './useAuth'
 // New canonical utilities
+export * from './runtimeConfig'
 export * from './peerService'
 export * from './queryString'
 export * from './mapApiError'

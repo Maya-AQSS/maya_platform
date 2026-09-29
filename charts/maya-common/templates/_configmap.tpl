@@ -1,10 +1,6 @@
 {{/*
-  ConfigMap with non-sensitive env vars consumed by all backend pods via
-  envFrom. Values come from `.Values.config`. Keys are passed verbatim
-  (UPPER_SNAKE_CASE expected) so consumer values.yaml mirrors `.env.example`.
-
-  Values that MUST be enforced in production (and not overridable from a
-  service `.env.example` mistake) are appended explicitly at the end.
+  ConfigMap de los backends (envFrom). Claves tal cual (.env). Los valores de
+  producción críticos se fuerzan al final y no se pueden sobreescribir.
 */}}
 {{- define "maya-common.configmap" -}}
 apiVersion: v1
@@ -15,11 +11,27 @@ metadata:
   labels:
     {{- include "maya-common.labels" . | nindent 4 }}
 data:
-  {{- range $key, $value := .Values.config }}
-  {{ $key }}: {{ $value | quote }}
+  {{- range $k, $v := .Values.config }}
+  {{ $k }}: {{ $v | toString | quote }}
   {{- end }}
-  # Forced production values — never overridable from `.env.example`.
   APP_ENV: "production"
   APP_DEBUG: "false"
   SESSION_SECURE_COOKIE: "true"
+{{- end -}}
+
+{{/* ConfigMap del frontend: MAYA_PUBLIC_* (→ /config.js) y MAYA_CSP. */}}
+{{- define "maya-common.frontendConfigmap" -}}
+{{- if .Values.frontend.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "maya-common.fullname" . }}-frontend-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "maya-common.componentLabels" (dict "root" . "component" "frontend") | nindent 4 }}
+data:
+  {{- range $k, $v := .Values.frontend.env }}
+  {{ $k }}: {{ $v | toString | quote }}
+  {{- end }}
+{{- end -}}
 {{- end -}}

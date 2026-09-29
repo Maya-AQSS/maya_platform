@@ -30,6 +30,13 @@ return [
         'mandatory' => (bool) env('MAYA_MESSAGING_MANDATORY', false),
     ],
 
+    'retry' => [
+        // Cola de Laravel donde se encolan los reintentos de publish (RetryAmqpPublishJob).
+        // null → la cola por defecto de la app (QUEUE_CONNECTION); si esta es `rabbitmq`,
+        // se usa `database`. Tiene que existir un `queue:work` que la procese.
+        'connection' => env('MAYA_MESSAGING_RETRY_CONNECTION'),
+    ],
+
     'notifications' => [
         'valid_channels' => explode(',', env('MAYA_NOTIFICATION_CHANNELS', 'app,email,webhook,slack')),
     ],
