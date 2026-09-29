@@ -1,26 +1,24 @@
 apiVersion: v2
 name: maya-common
 description: |
-  Library Helm chart shared by all Maya services. Exposes parametrizable
-  named templates for the standard Maya topology: backend (php-fpm + nginx
-  sidecar), frontend (nginx static), worker, scheduler, reverb, Service,
-  Ingress (Traefik), ConfigMap, Secret stub, pre-upgrade migration Job,
-  optional RWX PVC (for DMS media) and NetworkPolicy.
+  Library chart compartido por las apps Laravel + React de Maya. Despliega la
+  topología estándar sobre las 4 imágenes de cada app (api, worker, reverb,
+  frontend): Deployments, Services, Ingress (Traefik), ConfigMaps, Job de
+  migración, PVC opcional, PodDisruptionBudget, NetworkPolicy y ServiceAccount,
+  con secretos inyectados por Vault Agent (o un Secret externo).
 
-  Published to the Gitea OCI registry (oci://gitea.ceedcv.es/maya/charts).
-  Consumer charts declare it under `dependencies:` and re-export resources
-  via `{{ include "maya-common.<resource>" . }}` from their own
-  `templates/*.yaml` files.
-
-  See README.md for the values contract.
+  Cada app declara este chart en `dependencies:` y renderiza todo con
+  `{{ include "maya-common.all" . }}` desde un único template; su values.yaml es
+  el único fichero propio. El contrato de values está documentado en values.yaml
+  y en README.md.
 type: library
-version: 0.1.0
-appVersion: "0.21.0"
+version: 0.2.0
+appVersion: "0.22.0"
 icon: https://ceedcv.es/favicon.ico
 maintainers:
   - name: CEEDCV — equipo Maya
 sources:
-  - https://gitea.ceedcv.es/maya/maya_platform
+  - https://github.com/Maya-AQSS/maya_platform
 kubeVersion: ">=1.27.0-0"
 keywords:
   - maya
@@ -29,3 +27,4 @@ keywords:
   - library
   - traefik
   - keycloak
+  - vault

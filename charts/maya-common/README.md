@@ -1,103 +1,83 @@
-# maya-common — Helm library chart
+# maya-common — library chart de las apps Maya
 
-Shared Helm templates for the five Maya services (`maya_dms`,
-`maya_dashboard`, `maya_authorization`, `maya_audit`, `maya_logs`).
+Despliega en k3s la topología estándar de una app Laravel + React de Maya a
+partir de sus **4 imágenes** (`<app>-api`, `<app>-worker`, `<app>-reverb`,
+`<app>-frontend`, ver `maya_platform/docker/README.md`):
 
-This is a **library** chart (`type: library`) — Helm never installs it
-directly. Service charts depend on it via `oci://gitea.ceedcv.es/maya/charts`
-and re-export the resources they need with `{{ include "maya-common.<X>" . }}`.
+| Recurso | Imagen / args | Notas |
+|---|---|---|
+| Deployment `api` | `*-api` `["api"]` | nginx + php-fpm en 8080; probes `/healthz` (nginx) y `/api/v1/health/ready` |
+| Deployment `worker` | `*-worker` (args opcionales) | sin args ejecuta `MAYA_WORKER_CMD` de la imagen; liveness `pgrep -f "php artisan"` |
+| Deployment `scheduler` | `*-worker` `["scheduler"]` | 1 réplica; `scheduler.enabled` |
+| Deployment `reverb` | `*-reverb` `["reverb"]` | WebSocket en 8080; `REVERB_HOST` de los backends = Service interno |
+| Deployment `frontend` | `*-frontend` | nginx uid 101; ConfigMap propio con `MAYA_PUBLIC_*` (→ `/config.js`) y `MAYA_CSP` |
+| Job `migrate` | `*-worker` `["migrate"]` | hook pre-install/pre-upgrade; configuración inline (no depende del ConfigMap) |
+| ConfigMap, Services, Ingress ×2, PVC, PDB ×2, NetworkPolicy, ServiceAccount | | |
 
-## Publish
-
-```bash
-cd maya_platform/charts/maya-common
-helm package .
-helm registry login gitea.ceedcv.es
-helm push maya-common-0.1.0.tgz oci://gitea.ceedcv.es/maya/charts
-```
-
-## Consume from a service chart
+Es un chart de tipo `library`: no se instala solo. Cada app lo declara como
+dependencia y renderiza todo con una línea:
 
 ```yaml
-# maya_<service>/deploy/helm/Chart.yaml
+# deploy/helm/Chart.yaml
 apiVersion: v2
-name: maya-<service>
+name: maya-dms
 type: application
-version: 0.1.0
+version: 0.0.0-dev
 dependencies:
   - name: maya-common
-    version: ^0.1.0
-    repository: oci://gitea.ceedcv.es/maya/charts
+    version: 0.2.0
+    repository: oci://10.224.237.240:5000/charts
 ```
 
 ```yaml
-# maya_<service>/deploy/helm/templates/deployment-backend.yaml
-{{ include "maya-common.backend" . }}
+# deploy/helm/templates/all.yaml
+{{ include "maya-common.all" . }}
 ```
+
+`maya-common.all` fusiona los defaults de este chart (`values.yaml`) con los de la
+app, así el `values.yaml` de cada app solo contiene lo que cambia (imagen,
+`config`, hosts, claves de Vault, política de red...).
+
+## Contrato de values (resumen)
+
+| Clave | Qué es |
+|---|---|
+| `image.registry`, `image.repository`, `image.tag` | `<registry>/<repository>-<componente>:<tag>`. `tag` es obligatorio (misma versión que el chart). |
+| `config` | Variables no sensibles → ConfigMap (envFrom de todos los backends). `APP_ENV`, `APP_DEBUG` y `SESSION_SECURE_COOKIE` se fuerzan. |
+| `vault.keys` | Claves que el Vault Agent exporta en `/vault/secrets/config` desde `secret/data/<app>`; rol Vault = nombre de la release, atado a la ServiceAccount del chart. |
+| `secret.externalName` | Solo con `vault.enabled=false`: Secret k8s creado fuera del chart. |
+| `frontend.env` | `MAYA_PUBLIC_*` (configuración en ejecución de la SPA) y `MAYA_CSP`. |
+| `ingress.host`, `ingress.apiHost` | `<app>.ceedcv.es` (SPA) y `api.<app>.ceedcv.es` (API; `/app` → Reverb). |
+| `worker.args`, `scheduler.enabled`, `reverb.enabled`, `migrate.args` | Procesos. |
+| `storage.*` | PVC RWX (maya-nfs) montado en `storage/app/media` con `subPath`. |
+| `networkPolicy.egress.{cidrs,namespaces,internet}` | Deny-all por defecto; se abre solo lo listado (PostgreSQL, Redis, RabbitMQ, Keycloak, Vault, DNS). |
+
+Todo lo demás (réplicas, recursos, probes, anti-afinidad, PDB, securityContext)
+tiene defaults razonables en `values.yaml`.
+
+## Prerrequisitos en el clúster
+
+1. Namespace de la app y pull secret: `kubectl -n <ns> create secret docker-registry regcred …`.
+2. Vault: `vault kv put secret/<app> APP_KEY=… DB_PASSWORD=… …` (las claves de `vault.keys`) y un rol
+   `<app>` en `auth/kubernetes` atado a la SA `<app>` del namespace `<ns>` con una política
+   de solo lectura sobre `secret/data/<app>`.
+3. PostgreSQL: base de datos, rol y extensiones de la app; rol lector `maya_fdw_reader` para los FDW.
+4. RabbitMQ: vhost `/maya`, usuario de la app y topología `maya.*`.
+5. DNS `<app>` y `api.<app>` → VIP de Traefik; `ClusterIssuer maya-internal-ca`.
+
+## Publicar
 
 ```bash
-cd maya_<service>/deploy/helm
-helm dependency update
-helm upgrade --install maya-<service> . -n maya-<service> -f values.yaml \
-  --set image.tag=$(git -C ../.. rev-parse --short HEAD) \
-  --atomic --wait --timeout 10m
+helm package charts/maya-common -d /tmp/chart
+helm push --plain-http /tmp/chart/maya-common-0.2.0.tgz oci://10.224.237.240:5000/charts
 ```
 
-## Exposed templates
+## Probar en local
 
-| Template                           | Renders                                            |
-| ---------------------------------- | -------------------------------------------------- |
-| `maya-common.backend`              | Backend Deployment (php-fpm + nginx sidecar)       |
-| `maya-common.frontend`             | Frontend Deployment (nginx static)                 |
-| `maya-common.worker`               | Worker Deployment                                  |
-| `maya-common.scheduler`            | Scheduler Deployment (dashboard only)              |
-| `maya-common.reverb`               | Reverb Deployment (WebSockets)                     |
-| `maya-common.service`              | ClusterIP Services for backend/frontend/reverb     |
-| `maya-common.ingress`              | Traefik Ingresses for frontend/api/reverb hosts    |
-| `maya-common.configmap`            | ConfigMap with forced prod values                  |
-| `maya-common.secret`               | Secret stub (skipped when `secret.externalName`)   |
-| `maya-common.jobMigrate`           | pre-install + pre-upgrade migration Job            |
-| `maya-common.pvc`                  | RWX PVC on `maya-nfs` (DMS only)                   |
-| `maya-common.networkpolicy`        | deny-all + east-west allowlist                     |
-
-Helper templates: `maya-common.fullname`, `maya-common.componentName`,
-`maya-common.labels`, `maya-common.envFrom`, `maya-common.image`,
-`maya-common.runtimeVolumes`, `maya-common.runtimeVolumeMounts`,
-`maya-common.mediaVolumes`, `maya-common.mediaVolumeMounts`,
-`maya-common.preStop`, `maya-common.secretName`.
-
-## Values contract
-
-See [`values.yaml`](./values.yaml). The per-service matrix
-(`worker.command`, `scheduler.enabled`, `storage.enabled`, ingress hosts,
-backend memory limits, `logging.stack`) is set in the consumer chart, not here.
-
-### `TRUSTED_PROXIES`
-
-The `config.TRUSTED_PROXIES` value lands in the ConfigMap as an env var that
-`shared-http-laravel` `CommonMiddleware` reads to restrict
-`trustProxies(at: ...)`. **Always set this to the Traefik CIDR in prod**:
-
-```yaml
-config:
-  TRUSTED_PROXIES: "172.29.71.0/24,10.42.0.0/16"
+```bash
+# copia el chart como dependencia local y renderiza
+mkdir -p deploy/helm/charts && cp -r ../maya_platform/charts/maya-common deploy/helm/charts/
+sed -i 's|repository: oci://.*|repository: file://./charts/maya-common|' deploy/helm/Chart.yaml   # solo en local
+helm dependency build deploy/helm
+helm template maya-dms deploy/helm -n maya-dms --set image.tag=1.0.0 | kubeconform -strict
 ```
-
-## Migrations rollback caveat
-
-`helm rollback` does NOT revert the DB schema. The migrate Job runs as a
-`pre-upgrade` hook with `hook-delete-policy: before-hook-creation,hook-succeeded`.
-Always:
-
-1. Snapshot the Patroni DB before `helm upgrade`.
-2. Write **forward-only** migrations (no destructive DROPs after data has
-   been written).
-3. If a rollback is required, restore the DB snapshot first, then
-   `helm rollback`.
-
-## Status
-
-Initial scaffold (v0.1.0). The five service charts under
-`maya_*/deploy/helm/` currently inline equivalent templates; they will
-migrate to consuming this library in a follow-up PR once the OCI registry
-endpoint is reachable from WSL build hosts.

@@ -1,27 +1,20 @@
 {{/*
-  Secret stub. Two modes:
-
-  1. EXTERNAL (recommended for prod) — set `secret.externalName`. The chart
-     does NOT create a Secret. Operator creates it out-of-band (kubectl /
-     Sealed Secrets / Vault) using the keys listed in README.md.
-
-  2. CHART-MANAGED (dev / smoke tests) — set `secret.data.*` with
-     placeholders. Values render with `quote`. Real credentials MUST be
-     overridden via `--set-file` from a local file outside git.
+  Secret gestionado por el chart. Solo se renderiza con vault.enabled=false y
+  sin secret.externalName: pruebas locales, nunca producción.
 */}}
 {{- define "maya-common.secret" -}}
-{{- if not (and .Values.secret .Values.secret.externalName) -}}
+{{- if and (not .Values.vault.enabled) (not .Values.secret.externalName) .Values.secret.data -}}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "maya-common.secretName" . }}
+  name: {{ include "maya-common.fullname" . }}-secret
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "maya-common.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  {{- range $key, $value := .Values.secret.data }}
-  {{ $key }}: {{ $value | quote }}
+  {{- range $k, $v := .Values.secret.data }}
+  {{ $k }}: {{ $v | toString | quote }}
   {{- end }}
 {{- end -}}
 {{- end -}}

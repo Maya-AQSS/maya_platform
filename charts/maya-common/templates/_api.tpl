@@ -1,11 +1,9 @@
 {{/*
-  Deployment frontend: imagen *-frontend (maya/web-base, nginx uid 101, puerto 8080).
-  Solo escribe en /tmp. La configuración en ejecución llega por el ConfigMap
-  -frontend-config (MAYA_PUBLIC_* → /config.js, MAYA_CSP).
+  Deployment api: imagen *-api (nginx + php-fpm en un contenedor, puerto 8080).
 */}}
-{{- define "maya-common.frontend" -}}
-{{- if .Values.frontend.enabled -}}
-{{- $c := "frontend" -}}
+{{- define "maya-common.api" -}}
+{{- if .Values.api.enabled -}}
+{{- $c := "api" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +12,7 @@ metadata:
   labels:
     {{- include "maya-common.componentLabels" (dict "root" . "component" $c) | nindent 4 }}
 spec:
-  replicas: {{ .Values.frontend.replicas }}
+  replicas: {{ .Values.api.replicas }}
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
@@ -29,55 +27,55 @@ spec:
       labels:
         {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $c) | nindent 8 }}
       annotations:
-        checksum/config: {{ include "maya-common.frontendConfigmap" . | sha256sum }}
-        {{- with .Values.frontend.podAnnotations }}
+        {{- include "maya-common.backendPodAnnotations" . | nindent 8 }}
+        {{- with .Values.api.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- with .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      automountServiceAccountToken: false
-      securityContext:
-        {{- toYaml .Values.frontend.securityContext | nindent 8 }}
+      {{- include "maya-common.backendPodSpecCommon" . | nindent 6 }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
-        - name: web
-          image: {{ include "maya-common.image" (dict "root" . "component" "frontend") }}
+        - name: api
+          image: {{ include "maya-common.image" (dict "root" . "component" "api") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["api"]
           envFrom:
-            - configMapRef:
-                name: {{ include "maya-common.fullname" . }}-frontend-config
+            {{- include "maya-common.envFrom" . | nindent 12 }}
+          {{- with .Values.api.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.frontend.port }}
+              containerPort: {{ .Values.api.port }}
               protocol: TCP
+          {{- with .Values.api.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           livenessProbe:
-            {{- toYaml .Values.frontend.livenessProbe | nindent 12 }}
+            {{- toYaml .Values.api.livenessProbe | nindent 12 }}
           readinessProbe:
-            {{- toYaml .Values.frontend.readinessProbe | nindent 12 }}
+            {{- toYaml .Values.api.readinessProbe | nindent 12 }}
           resources:
-            {{- toYaml .Values.frontend.resources | nindent 12 }}
+            {{- toYaml .Values.api.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           lifecycle:
             {{- include "maya-common.preStop" . | nindent 12 }}
           volumeMounts:
-            - name: tmp
-              mountPath: /tmp
+            {{- include "maya-common.runtimeVolumeMounts" . | nindent 12 }}
       volumes:
-        - name: tmp
-          emptyDir: {}
-      {{- with .Values.frontend.nodeSelector }}
+        {{- include "maya-common.runtimeVolumes" . | nindent 8 }}
+      {{- with .Values.api.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.frontend.tolerations }}
+      {{- with .Values.api.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.frontend.affinity }}
+      {{- with .Values.api.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}

@@ -1,13 +1,9 @@
 {{/*
-  Media PVC (RWX on the maya-nfs StorageClass).
-
-  Only DMS sets storage.enabled=true. Mounted via subPath at
-  /var/www/html/storage/app/media so only the media subtree lives on NFS
-  (storage/framework, bootstrap/cache and storage/logs stay on ephemeral
-  emptyDir to keep readOnlyRootFilesystem semantics).
+  PVC de ficheros de la app (RWX en maya-nfs). Se conserva al desinstalar
+  (resource-policy: keep) para no perder los ficheros subidos.
 */}}
 {{- define "maya-common.pvc" -}}
-{{- if and .Values.storage .Values.storage.enabled -}}
+{{- if and .Values.storage.enabled (not .Values.storage.existingClaim) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -16,15 +12,13 @@ metadata:
   labels:
     {{- include "maya-common.componentLabels" (dict "root" . "component" "media") | nindent 4 }}
   annotations:
-    # PVCs are intentionally NOT deleted on `helm uninstall` to avoid losing
-    # uploaded media. To purge, delete the PVC manually.
     "helm.sh/resource-policy": keep
 spec:
   accessModes:
-    - {{ .Values.storage.accessMode | default "ReadWriteMany" }}
-  storageClassName: {{ .Values.storage.storageClassName | default "maya-nfs" }}
+    - {{ .Values.storage.accessMode }}
+  storageClassName: {{ .Values.storage.storageClassName }}
   resources:
     requests:
-      storage: {{ .Values.storage.size | default "20Gi" }}
+      storage: {{ .Values.storage.size }}
 {{- end -}}
 {{- end -}}
