@@ -14,15 +14,15 @@
 6. El tag dispara `split.yml` → los 13 repos read-only reciben commits + tag.
 7. Consumidores actualizan su `composer require` / `package.json` al nuevo tag.
 
-## Setup inicial requerido (una vez)
+## Setup actual (en producción)
 
 ### Secrets organizacionales en GitHub
 
 | Secret | Permisos | Uso |
 |--------|----------|-----|
 | `SPLIT_TOKEN` | Fine-grained PAT con `contents:write` en `Maya-AQSS/shared-*` | Push a los repos split |
-| `PACKAGIST_TOKEN` (futuro) | Token Packagist | Publicación auto en Packagist |
-| `NPM_TOKEN` (futuro) | Token npm | Publicación auto en npm |
+| `PACKAGIST_TOKEN` | Token Packagist | Auto-publish en Packagist (detecta tags) |
+| `NPM_TOKEN` | Token npm | Auto-publish en npm (workflow `publish-npm.yml`) |
 
 ### Repos read-only
 
@@ -50,40 +50,45 @@ Cada repo read-only debe tener:
 - Branch protection en `main` que solo permita pushes del bot del split.
 - README auto-generado por el split que apunte al mono-repo.
 
-## Cómo consumen los servicios
+## Cómo consumen los servicios (estado actual)
 
-### Laravel (Composer)
+### Laravel (Composer) — desde Packagist
 
-Cada `composer.json` de servicio:
+Cada `composer.json` de servicio instala directamente desde Packagist:
 
 ```jsonc
 {
   "require": {
-    "maya/shared-auth-laravel": "^0.1",
-    "maya/shared-http-laravel": "^0.1"
-  },
-  "repositories": [
-    { "type": "vcs", "url": "https://github.com/Maya-AQSS/shared-auth-laravel" },
-    { "type": "vcs", "url": "https://github.com/Maya-AQSS/shared-http-laravel" }
-  ]
-}
-```
-
-Cuando publiquemos a Packagist, se elimina la sección `repositories` y se
-sigue funcionando igual.
-
-### React (npm/pnpm)
-
-```jsonc
-{
-  "dependencies": {
-    "@maya/shared-auth-react": "github:Maya-AQSS/shared-auth-react#v0.1.0"
+    "ceedcv-maya/shared-auth-laravel": "^0.21",
+    "ceedcv-maya/shared-http-laravel": "^0.21"
   }
 }
 ```
 
-Pinear a tag concreto. Cuando publiquemos a npm registry, se reemplaza por
-`"@maya/shared-auth-react": "^0.1.0"`.
+Sin `repositories` VCS. Excepción: durante desarrollo de features del editor,
+`maya_dms` puede pinear `shared-editor-laravel` al repo split si necesita la última versión:
+
+```jsonc
+{
+  "repositories": [
+    { "type": "vcs", "url": "https://github.com/Maya-AQSS/shared-editor-laravel" }
+  ]
+}
+```
+
+### React (npm/pnpm) — desde npm registry
+
+```jsonc
+{
+  "dependencies": {
+    "@ceedcv-maya/shared-auth-react": "^0.21.0",
+    "@ceedcv-maya/shared-ui-react": "^0.21.0"
+  }
+}
+```
+
+Sin `github:` refs. Versionado desde registry.npmjs.org, detectado automáticamente
+por el workflow `publish-npm.yml`.
 
 ## Desarrollo local con overrides
 
@@ -123,11 +128,11 @@ Para JS proponemos un Makefile target en cada servicio:
 # maya_<service>/frontend/Makefile
 link-platform:
 \tpnpm link --global ../../../maya_platform/packages/js/shared-auth-react
-\tpnpm link --global @maya/shared-auth-react
+\tpnpm link --global @ceedcv-maya/shared-auth-react
 \t# ... repetir para cada paquete
 
 unlink-platform:
-\tpnpm unlink --global @maya/shared-auth-react
+\tpnpm unlink --global @ceedcv-maya/shared-auth-react
 \tpnpm install
 ```
 
@@ -135,14 +140,26 @@ Una alternativa más limpia: convertir cada `<servicio>/frontend` en un
 miembro de un workspace pnpm raíz que incluye `maya_platform/packages/js/*`.
 Lo abordaremos cuando estabilicemos el flujo.
 
-## Futuro: publicar en Packagist y npm
+## Flujo actual (tag → release)
 
-Cuando alcancemos `1.0.0`:
-
-1. Registrar `maya/*` en Packagist (un único maintainer, vincular al
-   mono-repo). Packagist detecta tags automáticamente.
-2. Publicar `@maya/*` en npm con `publishConfig.access: public`. Workflow
-   `release.yml` añade un step `pnpm publish -r --no-git-checks`.
-3. Eliminar la sección `repositories` de los `composer.json` consumidores.
-4. Cambiar `"github:Maya-AQSS/..."` por `"^1.0.0"` en `package.json`
-   consumidores.
+```
+tag vX.Y.Z en maya_platform
+    ↓
+release.yml
+    ├→ bump version (todos los paquetes)
+    ├→ actualiza CHANGELOG
+    └→ push
+         ↓
+split.yml (disparado por tag)
+    └→ subtree split a Maya-AQSS/shared-* 
+         ↓
+Packagist (detecta tag automáticamente)
+    ├→ publica ceedcv-maya/shared-*
+    └→ disponible en composer install
+         
+publish-npm.yml (manual o disparado tras split)
+    └→ pnpm publish -r (con provenance)
+         ↓
+npm registry (registry.npmjs.org)
+    ├→ publica @ceedcv-maya/shared-*
+    └→ disponible en npm install

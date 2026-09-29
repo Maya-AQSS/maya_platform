@@ -14,23 +14,37 @@ sub-tree split (ver [`docs/architecture.md`](docs/architecture.md)).
 
 | Paquete | Composer | Propósito |
 |---------|----------|-----------|
-| `shared-auth-laravel` | `maya/shared-auth-laravel` | Middleware JWT/JWKS contra Keycloak |
-| `shared-http-laravel` | `maya/shared-http-laravel` | Response envelope, health checks, base resources |
-| `shared-messaging-laravel` | `maya/shared-messaging-laravel` | Publishers RabbitMQ (audit, logs, alerts) |
-| `shared-platform-laravel` | `maya/shared-platform-laravel` | Helpers infra (FDW migrations, primitives) |
-| `shared-profile-laravel` | `maya/shared-profile-laravel` | Endpoints `GET /me`, `PUT /me/locale` |
+| `shared-auth-laravel` | `ceedcv-maya/shared-auth-laravel` | Middleware JWT/JWKS contra Keycloak |
+| `shared-http-laravel` | `ceedcv-maya/shared-http-laravel` | Response envelope, health checks, base resources |
+| `shared-messaging-laravel` | `ceedcv-maya/shared-messaging-laravel` | Publishers RabbitMQ (audit, logs, alerts) |
+| `shared-platform-laravel` | `ceedcv-maya/shared-platform-laravel` | Helpers infra (FDW migrations, primitives) |
+| `shared-profile-laravel` | `ceedcv-maya/shared-profile-laravel` | Endpoints `GET /me`, `PUT /me/locale` |
 
 ### React / TypeScript — `packages/js/`
 
 | Paquete | npm | Propósito |
 |---------|-----|-----------|
-| `shared-auth-react` | `@maya/shared-auth-react` | Hooks/contextos Keycloak |
-| `shared-dashboard-react` | `@maya/shared-dashboard-react` | Grid editable de widgets |
-| `shared-i18n-react` | `@maya/shared-i18n-react` | Setup i18next + recursos comunes |
-| `shared-layout-react` | `@maya/shared-layout-react` | AppLayout + Sidebar |
-| `shared-profile-react` | `@maya/shared-profile-react` | Contexto de perfil + permisos |
-| `shared-sidebar-react` | `@maya/shared-sidebar-react` | Favoritos, notificaciones, bell |
-| `shared-ui-react` | `@maya/shared-ui-react` | Sistema de componentes (Button, Card, ...) |
+| `shared-auth-react` | `@ceedcv-maya/shared-auth-react` | Hooks/contextos Keycloak |
+| `shared-dashboard-react` | `@ceedcv-maya/shared-dashboard-react` | Grid editable de widgets |
+| `shared-i18n-react` | `@ceedcv-maya/shared-i18n-react` | Setup i18next + recursos comunes |
+| `shared-layout-react` | `@ceedcv-maya/shared-layout-react` | AppLayout + Sidebar |
+| `shared-profile-react` | `@ceedcv-maya/shared-profile-react` | Contexto de perfil + permisos |
+| `shared-sidebar-react` | `@ceedcv-maya/shared-sidebar-react` | Favoritos, notificaciones, bell |
+| `shared-ui-react` | `@ceedcv-maya/shared-ui-react` | Sistema de componentes (Button, Card, ...) |
+
+## Imágenes base y CI de las apps — `docker/`
+
+Además de los paquetes, este repo fija el **runtime de producción** de todas las apps:
+
+| | |
+|---|---|
+| `docker/php-base` | `maya/php-base:8.4` (y `:8.4-pdf`): PHP-FPM + nginx + entrypoint con roles `api\|worker\|reverb\|migrate…` |
+| `docker/web-base` | `maya/web-base:1.29`: nginx sin privilegios para las SPAs, con `/config.js` en ejecución |
+| `.github/workflows/build-base-images.yml` | publica las bases en el registry local (al cambiar `docker/**` y una vez al mes) |
+| `.github/workflows/build-app.yml` | workflow reutilizable que cada app invoca para publicar sus 4 imágenes y su chart |
+
+El contrato (usuario, puertos, rutas escribibles, roles, variables) está en
+[`docker/README.md`](docker/README.md).
 
 ## Quick start (desarrollo)
 
@@ -51,33 +65,46 @@ composer validate-packages
 
 ## Cómo consumen los servicios estos paquetes
 
-Cada servicio Maya declara dependencia vía VCS apuntando al **repo split**
-(no a este mono-repo). Ejemplo en `maya_authorization/backend/composer.json`:
+### En producción (desde Packagist y npm)
 
+Los paquetes se publican automáticamente en **Packagist** (PHP) y **npm** (JS)
+con cada tag `vX.Y.Z`. Los servicios los instalan sin VCS repos:
+
+**PHP — `maya_*/backend/composer.json`:**
 ```json
 {
   "require": {
-    "maya/shared-auth-laravel": "^0.1"
-  },
-  "repositories": [
-    { "type": "vcs", "url": "https://github.com/Maya-AQSS/shared-auth-laravel" }
-  ]
-}
-```
-
-Y en `maya_authorization/frontend/package.json`:
-
-```json
-{
-  "dependencies": {
-    "@maya/shared-auth-react": "github:Maya-AQSS/shared-auth-react#v0.1.0"
+    "ceedcv-maya/shared-auth-laravel": "^0.21",
+    "ceedcv-maya/shared-http-laravel": "^0.21"
   }
 }
 ```
 
-Para desarrollo local con hot-reload contra tu checkout, los servicios
-soportan **overrides condicionales** que apuntan a este checkout de
-`maya_platform`. Ver [`docs/publishing.md`](docs/publishing.md).
+**JS — `maya_*/frontend/package.json`:**
+```json
+{
+  "dependencies": {
+    "@ceedcv-maya/shared-auth-react": "^0.21.0",
+    "@ceedcv-maya/shared-ui-react": "^0.21.0"
+  }
+}
+```
+
+**Excepción (VCS repo):** `maya_dms` requiere la última `shared-editor-laravel`
+durante desarrollo de features del editor:
+```json
+{
+  "repositories": [
+    { "type": "vcs", "url": "https://github.com/Maya-AQSS/shared-editor-laravel" }
+  ]
+}
+```
+
+### En desarrollo local (hot-reload contra checkout)
+
+Para iterar sin taggear, los servicios soportan **overrides condicionales**
+que apuntan a este checkout de `maya_platform`. Consulta [`docs/publishing.md`](docs/publishing.md)
+para `composer.local.json` (PHP) y `pnpm link` (JS).
 
 ## Documentación
 
