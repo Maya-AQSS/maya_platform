@@ -23,6 +23,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  delete window.__MAYA_CONFIG__;
   // Do NOT call vi.restoreAllMocks() — it would restore the module-level spy
   // back to the real createEcho, breaking subsequent tests.
 });
@@ -113,5 +114,42 @@ describe('bootstrapRealtime', () => {
     const config = mockCreateEcho.mock.calls[0][0];
     expect(config.host).toBe('ceedcv-dms-reverb.maya.test');
     expect(config.authEndpoint).toBe('https://ceedcv-dms-api.maya.test/api/v1/broadcasting/auth');
+  });
+
+  it('derives production hosts with the subdomain-api pattern (api.<app>.<domain>)', () => {
+    vi.stubEnv('VITE_REVERB_APP_KEY', 'key');
+    mockLocation('dms.ceedcv.es');
+
+    bootstrapRealtime('dms', async () => null);
+
+    const config = mockCreateEcho.mock.calls[0][0];
+    expect(config.host).toBe('api.dms.ceedcv.es');
+    expect(config.authEndpoint).toBe('https://api.dms.ceedcv.es/api/v1/broadcasting/auth');
+  });
+
+  it('honours options.authEndpoint', () => {
+    vi.stubEnv('VITE_REVERB_APP_KEY', 'key');
+
+    bootstrapRealtime('dms', async () => null, { authEndpoint: 'https://api.dms.example/api/v1/broadcasting/auth' });
+
+    const config = mockCreateEcho.mock.calls[0][0];
+    expect(config.authEndpoint).toBe('https://api.dms.example/api/v1/broadcasting/auth');
+  });
+
+  it('prefers the runtime config (window.__MAYA_CONFIG__) over baked env vars', () => {
+    vi.stubEnv('VITE_REVERB_APP_KEY', 'baked-key');
+    vi.stubEnv('VITE_REVERB_HOST', 'baked-reverb.example');
+    window.__MAYA_CONFIG__ = {
+      REVERB_APP_KEY: 'runtime-key',
+      REVERB_HOST: 'api.dms.ceedcv.es',
+      REVERB_AUTH_ENDPOINT: 'https://api.dms.ceedcv.es/api/v1/broadcasting/auth',
+    };
+
+    bootstrapRealtime('dms', async () => null);
+
+    const config = mockCreateEcho.mock.calls[0][0];
+    expect(config.appKey).toBe('runtime-key');
+    expect(config.host).toBe('api.dms.ceedcv.es');
+    expect(config.authEndpoint).toBe('https://api.dms.ceedcv.es/api/v1/broadcasting/auth');
   });
 });
