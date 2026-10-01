@@ -40,8 +40,8 @@ Además de los paquetes, este repo fija el **runtime de producción** de todas l
 |---|---|
 | `docker/php-base` | `maya/php-base:8.4` (y `:8.4-pdf`): PHP-FPM + nginx + entrypoint con roles `api\|worker\|reverb\|migrate…` |
 | `docker/web-base` | `maya/web-base:1.29`: nginx sin privilegios para las SPAs, con `/config.js` en ejecución |
-| `.github/workflows/build-base-images.yml` | publica las bases en el registry local (al cambiar `docker/**` y una vez al mes) |
-| `.github/workflows/build-app.yml` | workflow reutilizable que cada app invoca para publicar sus 4 imágenes y su chart |
+| `.github/workflows/build-base-images.yml` | publica en GHCR las imágenes base y el chart `maya-common` (al cambiar `docker/**` o `charts/maya-common/**` y una vez al mes) |
+| `.github/workflows/build-app.yml` | workflow reutilizable que cada app invoca: construye y publica en GHCR sus 4 imágenes (+ frontend `-dev`) y su chart, y pide a IaC el despliegue en el K3s de desarrollo |
 
 El contrato (usuario, puertos, rutas escribibles, roles, variables) está en
 [`docker/README.md`](docker/README.md).

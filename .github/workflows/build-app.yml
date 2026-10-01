@@ -1,19 +1,39 @@
 name: build-app
-# Workflow REUTILIZABLE: construye y publica las 4 imágenes de una app Maya
-# (api, worker, reverb, frontend) y su chart Helm como artefacto OCI en el
-# registry local. Cada app lo invoca desde su .github/workflows/build-and-publish.yml:
+# Workflow REUTILIZABLE: construye, prueba y publica en GHCR las imágenes de una app
+# Maya y su chart Helm, y (opcional) pide a IaC que las despliegue en el K3s de desarrollo.
+#
+#   ghcr.io/maya-aqss/<app>-api|worker|reverb:<versión>     backend (Dockerfile.prod, targets)
+#   ghcr.io/maya-aqss/<app>-frontend:<versión>              SPA con los VITE_* de producción
+#   ghcr.io/maya-aqss/<app>-frontend:<versión>-dev          SPA con los VITE_* de desarrollo
+#   oci://ghcr.io/maya-aqss/charts/<app>:<versión>          chart (incluye maya-common)
+#
+# Corre en runners de GitHub: sirve igual para repos públicos y privados, y el runner
+# interno no ejecuta código de los repos. La copia a la registry interna
+# (10.224.237.240:5000) y el despliegue los hace IaC (workflow dev-deploy.yml, en un
+# runner dentro del K3s de desarrollo) por digest.
+#
+# Uso desde cada app (.github/workflows/build-and-publish.yml):
 #
 #   jobs:
 #     publish:
 #       uses: Maya-AQSS/maya_platform/.github/workflows/build-app.yml@main
-#       with: { app: maya-audit, version: "${{ inputs.version }}" }
+#       permissions: { contents: read, packages: write }
+#       with: { app: maya-audit }
 #       secrets: inherit
 #
-# Corre en el runner self-hosted `local-builder` (VM 110). Sube por 127.0.0.1:5000;
-# k3s descarga las mismas imágenes por 10.224.237.240:5000 (mismo registry).
+# Versión: la de `inputs.version`; si no, la del tag vX.Y.Z; si no, una de
+# desarrollo `0.0.0-<rama>.<run>.g<sha7>` (SemVer válida para imágenes y chart).
 #
-# Secrets (org Maya-AQSS): REGISTRY_USERNAME, REGISTRY_PASSWORD.
-# Opcional: COMPOSER_AUTH (auth.json en JSON) si algún paquete viene de un repo privado.
+# Secretos (todos opcionales):
+#   VITE_REVERB_APP_KEY    clave pública de Reverb de PRODUCCIÓN (la de Vault). Sin ella,
+#                          la SPA de producción arranca sin tiempo real.
+#   COMPOSER_AUTH          auth.json si algún paquete viene de un repo privado.
+#
+# Despliegue en desarrollo: el job deploy-dev usa el environment `maya-dev-dispatch` del
+# repo de la app, con los secretos MAYA_DISPATCH_APP_ID / MAYA_DISPATCH_APP_KEY (GitHub App
+# con Actions: write SOLO sobre IaC) y la regla «Deployment branches: main y tags v*». Así una
+# rama cualquiera no puede leer la clave. Sin ese environment, las imágenes se publican
+# igual y no se despliega.
 
 on:
   workflow_call:
@@ -23,158 +43,273 @@ on:
         required: true
         type: string
       version:
-        description: "Versión semver sin 'v'. Vacío = se toma del tag vX.Y.Z que disparó el workflow."
+        description: "Versión SemVer sin 'v'. Vacío = tag vX.Y.Z o versión de desarrollo."
         required: false
         type: string
         default: ""
       php_base:
-        description: "Imagen base del backend dentro del registry (maya/…)."
+        description: "Imagen base del backend en ghcr.io/maya-aqss (php-base:8.4, php-base:8.4-pdf)."
         required: false
         type: string
-        default: "maya/php-base:8.4"
+        default: "php-base:8.4"
       web_base:
-        description: "Imagen base del frontend dentro del registry (maya/…)."
+        description: "Imagen base del frontend en ghcr.io/maya-aqss."
         required: false
         type: string
-        default: "maya/web-base:1.29"
+        default: "web-base:1.29"
       chart_path:
         description: "Ruta del chart Helm de la app. Vacío = no se publica chart."
         required: false
         type: string
         default: "deploy/helm"
-      vite_args:
-        description: "TRANSITORIO: build-args VITE_* (una por línea, CLAVE=valor) mientras la SPA no lea /config.js."
+      prod_domain:
+        description: "Dominio de producción: <slug>.<dominio> y api.<slug>.<dominio>."
+        required: false
+        type: string
+        default: "ceedcv.es"
+      dev_domain:
+        description: "Dominio de desarrollo: dev-<slug>.<dominio> y dev-<slug>-api.<dominio>."
+        required: false
+        type: string
+        default: "10.224.237.230.nip.io"
+      dev_variant:
+        description: "Construir también el frontend -dev (VITE_* de desarrollo)."
+        required: false
+        type: boolean
+        default: true
+      vite_args_extra:
+        description: "VITE_* propios de la app (CLAVE=valor, una por línea), para las dos variantes."
         required: false
         type: string
         default: ""
+      deploy_dev:
+        description: "Pedir a IaC el despliegue en el K3s de desarrollo."
+        required: false
+        type: boolean
+        default: true
     secrets:
-      REGISTRY_USERNAME:
-        required: true
-      REGISTRY_PASSWORD:
-        required: true
+      VITE_REVERB_APP_KEY:
+        required: false
       COMPOSER_AUTH:
         required: false
+      # Declarados para poder leerlos en deploy-dev, pero los llamadores NO los pasan: en un
+      # job con `environment`, GitHub usa el secreto del environment (maya-dev-dispatch).
+      MAYA_DISPATCH_APP_ID:
+        required: false
+      MAYA_DISPATCH_APP_KEY:
+        required: false
+    outputs:
+      version:
+        description: "Versión publicada"
+        value: ${{ jobs.build.outputs.version }}
 
 env:
-  REGISTRY: 127.0.0.1:5000
-  DOCKER_BUILDKIT: "1"
+  REGISTRY: ghcr.io/maya-aqss
 
 jobs:
-  build-and-publish:
-    runs-on: [self-hosted, local-builder]
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      digests: ${{ steps.digests.outputs.digests }}
+    env:
+      INPUT_APP: ${{ inputs.app }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolver versión
+      # Estándar de mensajería (maya_platform/messaging): la app tiene que cumplirlo para publicarse.
+      # Se usa la versión del estándar que acompaña a este workflow (mismo commit de maya_platform).
+      - uses: actions/checkout@v4
+        with:
+          repository: Maya-AQSS/maya_platform
+          ref: ${{ job.workflow_sha }}
+          path: .maya-platform
+          sparse-checkout: messaging
+      - name: Estándar de mensajería
+        env:
+          APP: ${{ inputs.app }}
         run: |
-          set -eu
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
-          else
+          set -euo pipefail
+          pip install --quiet pyyaml
+          extra=()
+          # La plantilla no está en el catálogo: el scaffold la convierte en maya-<slug>.
+          [ "$APP" = maya-template ] && extra+=(--template)
+          python3 .maya-platform/messaging/tools/check_app.py . "${extra[@]}"
+
+      - name: Resolver versión
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          elif [ "$GITHUB_REF_TYPE" = tag ] && echo "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+'; then
             VERSION="${GITHUB_REF_NAME#v}"
+          else
+            BRANCH=$(echo "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^0-9a-z-]+/-/g; s/^-+//; s/-+$//' | cut -c1-30)
+            VERSION="0.0.0-${BRANCH:-ref}.${GITHUB_RUN_NUMBER}.g${GITHUB_SHA::7}"
           fi
-          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
-            || { echo "::error::versión '$VERSION' no es semver (X.Y.Z)"; exit 1; }
+          # [[ =~ ]] y no grep (grep valida línea a línea: dejaría pasar una versión multilínea,
+          # que además contaminaría GITHUB_ENV).
+          [[ $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::versión no válida (SemVer X.Y.Z[-pre] de una línea)"; exit 1; }
+          APP="$INPUT_APP"
+          [[ $APP =~ ^maya-[a-z][a-z0-9]*$ ]] || { echo "::error::app no válida (maya-<slug>, slug [a-z][a-z0-9]*)"; exit 1; }
           {
             echo "VERSION=$VERSION"
             echo "SHA_TAG=sha-${GITHUB_SHA::8}"
-            echo "APP=${{ inputs.app }}"
-            echo "IMG=127.0.0.1:5000/maya/${{ inputs.app }}"
+            echo "APP=$APP"
+            echo "SLUG=${APP#maya-}"
+            echo "IMG=$REGISTRY/$APP"
           } >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Login en el registry (docker + helm OCI)
-        run: |
-          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
-          echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login "$REGISTRY" --plain-http -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Imágenes base
-        run: |
-          docker pull "$REGISTRY/${{ inputs.php_base }}"
-          docker pull "$REGISTRY/${{ inputs.web_base }}"
+      - uses: docker/setup-buildx-action@v3
+      # Expone ACTIONS_RUNTIME_TOKEN/ACTIONS_CACHE_URL para la caché type=gha de buildx.
+      - uses: crazy-max/ghaction-github-runtime@v3
 
       - name: Build backend (api, worker, reverb)
         env:
           COMPOSER_AUTH: ${{ secrets.COMPOSER_AUTH }}
         run: |
           set -eu
-          SECRET_ARGS=""
+          SECRET_ARGS=()
           if [ -n "${COMPOSER_AUTH:-}" ]; then
-            SECRET_ARGS="--secret id=composer_auth,env=COMPOSER_AUTH"
+            # shellcheck disable=SC2054  # la coma es parte de la opción de --secret
+            SECRET_ARGS=(--secret id=composer_auth,env=COMPOSER_AUTH)
           fi
-          LABELS="--label org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }} \
-                  --label org.opencontainers.image.revision=${{ github.sha }} \
-                  --label org.opencontainers.image.version=$VERSION \
-                  --label org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           for t in api worker reverb; do
-            # shellcheck disable=SC2086
-            docker build -f backend/Dockerfile.prod --target "$t" $SECRET_ARGS $LABELS \
+            docker buildx build --load -f backend/Dockerfile.prod --target "$t" "${SECRET_ARGS[@]}" \
+              --cache-from "type=gha,scope=$APP-backend" --cache-to "type=gha,scope=$APP-backend,mode=max" \
+              --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+              --label "org.opencontainers.image.revision=${{ github.sha }}" \
+              --label "org.opencontainers.image.version=$VERSION" \
+              --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
               --build-arg "MAYA_PHP_BASE=$REGISTRY/${{ inputs.php_base }}" \
               -t "$IMG-$t:$VERSION" -t "$IMG-$t:$SHA_TAG" backend
           done
 
-      - name: Build frontend
+      # TRANSITORIO: mientras la SPA lea import.meta.env en vez de /config.js, cada entorno
+      # necesita su frontend con sus VITE_*. Hosts: los de maya-common (<slug> / api.<slug>
+      # en producción; dev-<slug> / dev-<slug>-api en desarrollo, patrón que ya entiende
+      # peerOrigin de @ceedcv-maya 0.20).
+      - name: Build frontend (producción y desarrollo)
+        env:
+          PROD_DOMAIN: ${{ inputs.prod_domain }}
+          DEV_DOMAIN: ${{ inputs.dev_domain }}
+          DEV_VARIANT: ${{ inputs.dev_variant }}
+          VITE_ARGS_EXTRA: ${{ inputs.vite_args_extra }}
+          PROD_REVERB_KEY: ${{ secrets.VITE_REVERB_APP_KEY }}
         run: |
           set -eu
-          VITE_ARGS=""
-          while IFS= read -r line; do
-            [ -n "$line" ] || continue
-            VITE_ARGS="$VITE_ARGS --build-arg $line"
-          done <<'EOF'
-          ${{ inputs.vite_args }}
-          EOF
-          # shellcheck disable=SC2086
-          docker build -f frontend/Dockerfile.prod $VITE_ARGS \
-            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
-            --label "org.opencontainers.image.revision=${{ github.sha }}" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --build-arg "MAYA_WEB_BASE=$REGISTRY/${{ inputs.web_base }}" \
-            -t "$IMG-frontend:$VERSION" -t "$IMG-frontend:$SHA_TAG" frontend
+          build_frontend() {   # $1 = tag, resto = CLAVE=valor
+            local tag="$1"; shift
+            local args=()
+            for kv in "$@"; do args+=(--build-arg "$kv"); done
+            while IFS= read -r line; do
+              [ -n "$line" ] && args+=(--build-arg "$line")
+            done <<< "$VITE_ARGS_EXTRA"
+            docker buildx build --load -f frontend/Dockerfile.prod "${args[@]}" \
+              --cache-from "type=gha,scope=$APP-frontend" --cache-to "type=gha,scope=$APP-frontend,mode=max" \
+              --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+              --label "org.opencontainers.image.revision=${{ github.sha }}" \
+              --label "org.opencontainers.image.version=$VERSION" \
+              --build-arg "MAYA_WEB_BASE=$REGISTRY/${{ inputs.web_base }}" \
+              -t "$tag" frontend
+          }
+          build_frontend "$IMG-frontend:$VERSION" \
+            "VITE_API_URL=https://api.$SLUG.$PROD_DOMAIN/api/v1" \
+            "VITE_KEYCLOAK_URL=https://keycloak.$PROD_DOMAIN" \
+            "VITE_KEYCLOAK_REALM=CEED" "VITE_KEYCLOAK_CLIENT_ID=$APP" \
+            "VITE_REVERB_HOST=api.$SLUG.$PROD_DOMAIN" "VITE_REVERB_APP_KEY=${PROD_REVERB_KEY:-}" \
+            "VITE_DASHBOARD_URL=https://dashboard.$PROD_DOMAIN" \
+            "VITE_DASHBOARD_API_URL=https://api.dashboard.$PROD_DOMAIN"
+          docker tag "$IMG-frontend:$VERSION" "$IMG-frontend:$SHA_TAG"
+          if [ "$DEV_VARIANT" = true ]; then
+            # La clave de Reverb de desarrollo es pública y fija: dev-<slug>-key (IaC dev/).
+            build_frontend "$IMG-frontend:$VERSION-dev" \
+              "VITE_API_URL=https://dev-$SLUG-api.$DEV_DOMAIN/api/v1" \
+              "VITE_KEYCLOAK_URL=https://dev-keycloak.$DEV_DOMAIN" \
+              "VITE_KEYCLOAK_REALM=CEED" "VITE_KEYCLOAK_CLIENT_ID=$APP" \
+              "VITE_REVERB_HOST=dev-$SLUG-api.$DEV_DOMAIN" "VITE_REVERB_APP_KEY=dev-$SLUG-key" \
+              "VITE_DASHBOARD_URL=https://dev-dashboard.$DEV_DOMAIN" \
+              "VITE_DASHBOARD_API_URL=https://dev-dashboard-api.$DEV_DOMAIN"
+          fi
 
       # Las imágenes arrancan como en k8s: sin root y con raíz de solo lectura.
       - name: Smoke tests
         run: |
           set -eu
-          RO="--read-only --tmpfs /tmp:uid=82,gid=82 --tmpfs /var/www/html/storage:uid=82,gid=82 --tmpfs /var/www/html/bootstrap/cache:uid=82,gid=82"
-          ENV="-e APP_KEY=base64:$(head -c 32 /dev/urandom | base64) -e APP_ENV=production -e CACHE_STORE=array -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync -e BROADCAST_CONNECTION=log -e JWT_AUDIENCE=smoke -e RABBITMQ_USER=smoke -e RABBITMQ_PASSWORD=smoke -e DB_PASSWORD=smoke -e LOG_MGMT_DB_PASSWORD=smoke"
-          # shellcheck disable=SC2086
-          docker run --rm $RO $ENV "$IMG-worker:$VERSION" worker --version | grep -q 'Laravel Framework'
+          # shellcheck disable=SC2054  # las comas son opciones de --tmpfs, no separadores
+          RO=(--read-only --tmpfs /tmp:uid=82,gid=82 --tmpfs /var/www/html/storage:uid=82,gid=82 --tmpfs /var/www/html/bootstrap/cache:uid=82,gid=82)
+          ENV=(-e "APP_KEY=base64:$(head -c 32 /dev/urandom | base64)" -e APP_ENV=production -e CACHE_STORE=array
+               -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync -e BROADCAST_CONNECTION=log -e JWT_AUDIENCE=smoke
+               -e RABBITMQ_USER=smoke -e RABBITMQ_PASSWORD=smoke -e DB_PASSWORD=smoke -e LOG_MGMT_DB_PASSWORD=smoke)
+          docker run --rm "${RO[@]}" "${ENV[@]}" "$IMG-worker:$VERSION" worker --version | grep -q 'Laravel Framework'
           test "$(docker run --rm "$IMG-worker:$VERSION" exec id -u)" = "82"
-          # shellcheck disable=SC2086
-          C=$(docker run -d --rm $RO $ENV -p 18081:8080 "$IMG-api:$VERSION")
-          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1 && break; sleep 1; done
+          C=$(docker run -d --rm "${RO[@]}" "${ENV[@]}" -p 18081:8080 "$IMG-api:$VERSION")
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:18081/healthz >/dev/null 2>&1 && break; sleep 1; done
           curl -fsS http://127.0.0.1:18081/api/v1/health/live | grep -q '"ok"' || { docker logs "$C"; docker stop "$C"; exit 1; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/.env)" != 200
           docker stop -t 5 "$C" >/dev/null
-          F=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18082:8080 "$IMG-frontend:$VERSION")
-          sleep 2
-          curl -fsS http://127.0.0.1:18082/healthz >/dev/null
-          curl -fsS http://127.0.0.1:18082/ | grep -q '/assets/'
-          docker stop -t 3 "$F" >/dev/null
+          for tag in "$VERSION" $([ "${{ inputs.dev_variant }}" = true ] && echo "$VERSION-dev"); do
+            F=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18082:8080 "$IMG-frontend:$tag")
+            for _ in $(seq 1 20); do curl -fsS http://127.0.0.1:18082/healthz >/dev/null 2>&1 && break; sleep 1; done
+            curl -fsS http://127.0.0.1:18082/ | grep -q '/assets/'
+            docker stop -t 3 "$F" >/dev/null
+          done
 
       - name: Push de las imágenes
         run: |
+          set -eu
           for t in api worker reverb frontend; do
             docker push "$IMG-$t:$VERSION"
             docker push "$IMG-$t:$SHA_TAG"
           done
+          if [ "${{ inputs.dev_variant }}" = true ]; then docker push "$IMG-frontend:$VERSION-dev"; fi
 
       - name: Package & push del chart Helm (OCI)
         if: inputs.chart_path != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -eu
-          # maya-common se resuelve desde el registry (Chart.yaml → oci://.../charts).
-          helm dependency update "${{ inputs.chart_path }}" --plain-http
+          set -euo pipefail
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          # maya-common se resuelve de oci://ghcr.io/maya-aqss/charts y queda dentro del .tgz.
+          helm dependency update "${{ inputs.chart_path }}"
           helm lint "${{ inputs.chart_path }}" --set "image.tag=$VERSION"
           CHART=$(helm show chart "${{ inputs.chart_path }}" | awk '/^name:/{print $2}')
           helm package "${{ inputs.chart_path }}" --version "$VERSION" --app-version "$VERSION" -d /tmp/chart
-          helm push --plain-http "/tmp/chart/${CHART}-${VERSION}.tgz" "oci://$REGISTRY/charts"
+          helm push "/tmp/chart/${CHART}-${VERSION}.tgz" "oci://$REGISTRY/charts" 2>&1 | tee /tmp/chart-push.log
           echo "CHART=$CHART" >> "$GITHUB_ENV"
+          echo "CHART_DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' /tmp/chart-push.log | head -1)" >> "$GITHUB_ENV"
 
-      - name: Limpiar imágenes locales antiguas
-        if: success()
+      # Digests publicados: IaC copia y despliega exactamente estos (no lo que apunte el tag).
+      - name: Digests publicados
+        id: digests
         run: |
-          for t in api worker reverb frontend; do
-            docker images "$IMG-$t" --format '{{.ID}} {{.CreatedAt}}' | sort -k2 -r | tail -n +7 | awk '{print $1}' | xargs -r docker rmi --force || true
-          done
+          set -euo pipefail
+          d() { docker image inspect "$1" --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep -m1 "^$2@" | sed 's/.*@//'; }
+          json=$(jq -cn \
+            --arg api "$(d "$IMG-api:$VERSION" "$IMG-api")" \
+            --arg worker "$(d "$IMG-worker:$VERSION" "$IMG-worker")" \
+            --arg reverb "$(d "$IMG-reverb:$VERSION" "$IMG-reverb")" \
+            --arg frontend "$(d "$IMG-frontend:$VERSION" "$IMG-frontend")" \
+            --arg frontend_dev "$([ "${{ inputs.dev_variant }}" = true ] && d "$IMG-frontend:$VERSION-dev" "$IMG-frontend")" \
+            --arg chart "${CHART_DIGEST:-}" \
+            '{api:$api, worker:$worker, reverb:$reverb, frontend:$frontend, frontend_dev:$frontend_dev, chart:$chart} | with_entries(select(.value != ""))')
+          echo "$json" | jq .
+          echo "digests=$json" >> "$GITHUB_OUTPUT"
 
       - name: Resumen
         if: always()
@@ -182,12 +317,57 @@ jobs:
           {
             echo "## $APP $VERSION"
             echo
-            echo "| Artefacto | Referencia |"
-            echo "|---|---|"
+            echo "| Artefacto | Referencia | Digest |"
+            echo "|---|---|---|"
             for t in api worker reverb frontend; do
-              echo "| $t | \`maya/$APP-$t:$VERSION\` (\`$SHA_TAG\`) |"
+              D=$(docker image inspect "$IMG-$t:$VERSION" --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/.*@//')
+              echo "| $t | \`$IMG-$t:$VERSION\` | \`${D:-—}\` |"
             done
-            [ -n "${CHART:-}" ] && echo "| chart | \`oci://<registry>/charts/$CHART:$VERSION\` |"
-            echo
-            echo "Despliegue: \`MAYA_DEPLOY_APPS=1 MAYA_$(echo "$APP" | sed 's/^maya-//' | tr a-z- A-Z_)_VERSION=$VERSION helmfile apply --selector name=$APP\`"
+            [ "${{ inputs.dev_variant }}" = true ] && echo "| frontend (dev) | \`$IMG-frontend:$VERSION-dev\` | |"
+            [ -n "${CHART:-}" ] && echo "| chart | \`oci://$REGISTRY/charts/$CHART:$VERSION\` | |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Pide a IaC el despliegue en desarrollo. IaC valida la petición (app permitida, autor
+  # con acceso a IaC), copia las imágenes a la registry interna y despliega.
+  deploy-dev:
+    needs: build
+    if: inputs.deploy_dev && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    # Environment del repo de la app: sus secretos solo existen en main y tags v*.
+    environment: maya-dev-dispatch
+    permissions: {}
+    steps:
+      - name: ¿Está configurada la GitHub App de despliegue?
+        id: check
+        env:
+          APP_ID: ${{ secrets.MAYA_DISPATCH_APP_ID }}
+        run: |
+          if [ -z "$APP_ID" ]; then
+            echo "::notice::Sin MAYA_DISPATCH_APP_ID: imágenes publicadas, no se despliega en desarrollo."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/create-github-app-token@v1
+        if: steps.check.outputs.ok == 'true'
+        id: token
+        with:
+          app-id: ${{ secrets.MAYA_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.MAYA_DISPATCH_APP_KEY }}
+          owner: Maya-AQSS
+          repositories: IaC
+
+      - name: Lanzar dev-deploy en IaC
+        if: steps.check.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          APP: ${{ inputs.app }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DIGESTS: ${{ needs.build.outputs.digests }}
+        run: |
+          set -euo pipefail
+          gh workflow run dev-deploy.yml -R Maya-AQSS/IaC --ref main \
+            -f app="$APP" -f version="$VERSION" -f digests="$DIGESTS" \
+            -f source_repo="$GITHUB_REPOSITORY" -f source_sha="$GITHUB_SHA" -f actor="$GITHUB_ACTOR"
+          echo "Despliegue en desarrollo pedido a IaC: $APP $VERSION" >> "$GITHUB_STEP_SUMMARY"

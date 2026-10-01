@@ -118,9 +118,12 @@ default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src
 
 ## Publicación
 
-Workflow `.github/workflows/build-base-images.yml`: se lanza al cambiar `docker/**`
-en `main`, a mano, y el primer lunes de cada mes (parches de seguridad de Alpine y
-PHP). Construye, pasa las comprobaciones (`php -m`, `nginx -t`, `php-fpm -t`,
-arranque con raíz de solo lectura) y publica en el registry local. Tras publicar
-una base nueva, las apps la adoptan al reconstruirse con el nuevo
-`--build-arg MAYA_PHP_BASE`.
+Workflow `.github/workflows/build-base-images.yml` (runners de GitHub): se lanza al cambiar
+`docker/**` o `charts/maya-common/**` en `main`, a mano, y el primer lunes de cada mes (parches
+de seguridad de Alpine y PHP). Construye, pasa las comprobaciones (`php -m`, `nginx -t`,
+`php-fpm -t`, arranque con raíz de solo lectura) y publica en **GHCR**
+(`ghcr.io/maya-aqss/php-base`, `web-base` y el chart `maya-common`). Las apps construyen
+sobre esas bases en su propio workflow (`build-app.yml`, también en GitHub) y solo sus
+imágenes finales llegan a la registry interna (`10.224.237.240:5000`): las copia por digest
+el workflow `dev-deploy.yml` del repo IaC (ver `IaC/dev/PLAN.md`). Tras publicar una base
+nueva, las apps la adoptan en su siguiente build.

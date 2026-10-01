@@ -1,67 +1,78 @@
 name: build-base-images
-# Construye y publica en el registry local las imágenes base de Maya
-# (docker/php-base → maya/php-base:8.4 y :8.4-pdf; docker/web-base → maya/web-base:1.29).
+# Construye y publica en GHCR las piezas comunes de las apps Maya:
+#   docker/php-base  → ghcr.io/maya-aqss/php-base:8.4 y :8.4-pdf
+#   docker/web-base  → ghcr.io/maya-aqss/web-base:1.29
+#   charts/maya-common → oci://ghcr.io/maya-aqss/charts/maya-common:<version de Chart.yaml>
 #
-# Corre en el runner self-hosted `local-builder` (VM 110, registry en 127.0.0.1:5000).
-# Se lanza al cambiar docker/** en main, a mano, y una vez al mes para recoger los
-# parches de seguridad de Alpine, PHP y nginx. Las apps adoptan la base nueva al
-# reconstruirse con --build-arg MAYA_PHP_BASE / MAYA_WEB_BASE.
+# Corre en runners de GitHub (este repo es público: el runner interno de la VM 110 no
+# admite repos públicos y no debe ejecutar su código). Las apps construyen sobre estas
+# bases en su propio workflow (build-app.yml) y la infraestructura copia a la registry
+# interna solo las imágenes finales (IaC, dev/scripts/deploy-app.sh).
 #
-# Secrets (org Maya-AQSS): REGISTRY_USERNAME, REGISTRY_PASSWORD.
+# Se lanza al cambiar docker/** o charts/** y una vez al mes para recoger los parches de
+# seguridad de Alpine, PHP y nginx. Paquetes de GHCR: públicos (no contienen nada privado).
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      # TRANSITORIO (plan-dev-k3s): hasta fusionar en main, publicar desde la rama del plan.
+      - plan-dev-k3s
     paths:
       - "docker/**"
+      - "charts/maya-common/**"
       - ".github/workflows/build-base-images.yml"
   schedule:
     - cron: "0 6 1-7 * 1"   # primer lunes de cada mes, 06:00 UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 env:
-  REGISTRY: 127.0.0.1:5000
+  REGISTRY: ghcr.io/maya-aqss
   PHP_TAG: "8.4"
   NGINX_TAG: "1.29"
-  DOCKER_BUILDKIT: "1"
 
 jobs:
-  build-and-push:
-    runs-on: [self-hosted, local-builder]
+  base-images:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Fecha de la build (tag inmutable)
         run: echo "STAMP=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
 
-      - name: Registry disponible
-        run: curl -fsS "http://$REGISTRY/v2/" -u "${{ secrets.REGISTRY_USERNAME }}:${{ secrets.REGISTRY_PASSWORD }}" >/dev/null
-
-      - name: Login en el registry
-        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build php-base
         run: |
+          set -eu
+          SRC="org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}"
           docker build --pull --target base \
+            --label "$SRC" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t "$REGISTRY/maya/php-base:$PHP_TAG-$STAMP" \
-            -t "$REGISTRY/maya/php-base:$PHP_TAG" \
-            -t "maya/php-base:$PHP_TAG" \
+            -t "$REGISTRY/php-base:$PHP_TAG-$STAMP" -t "$REGISTRY/php-base:$PHP_TAG" \
             docker/php-base
           docker build --target pdf \
+            --label "$SRC" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
-            -t "$REGISTRY/maya/php-base:$PHP_TAG-pdf-$STAMP" \
-            -t "$REGISTRY/maya/php-base:$PHP_TAG-pdf" \
+            -t "$REGISTRY/php-base:$PHP_TAG-pdf-$STAMP" -t "$REGISTRY/php-base:$PHP_TAG-pdf" \
             docker/php-base
 
       - name: Build web-base
         run: |
           docker build --pull \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=${{ github.sha }}" \
             --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -t "$REGISTRY/maya/web-base:$NGINX_TAG-$STAMP" \
-            -t "$REGISTRY/maya/web-base:$NGINX_TAG" \
+            -t "$REGISTRY/web-base:$NGINX_TAG-$STAMP" -t "$REGISTRY/web-base:$NGINX_TAG" \
             docker/web-base
 
       # Los Dockerfile ya validan nginx -t, php-fpm -t y las extensiones; aquí
@@ -69,12 +80,11 @@ jobs:
       - name: Smoke tests
         run: |
           set -eu
-          docker run --rm --read-only --tmpfs /tmp:uid=82,gid=82 "$REGISTRY/maya/php-base:$PHP_TAG-$STAMP" exec php -v | head -1
-          test "$(docker run --rm "$REGISTRY/maya/php-base:$PHP_TAG-$STAMP" exec id -u)" = "82"
-          docker run --rm "$REGISTRY/maya/php-base:$PHP_TAG-pdf-$STAMP" exec weasyprint --version
-          C=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18080:8080 -e MAYA_PUBLIC_SMOKE=ok "$REGISTRY/maya/web-base:$NGINX_TAG-$STAMP")
-          sleep 2
-          curl -fsS http://127.0.0.1:18080/healthz
+          docker run --rm --read-only --tmpfs /tmp:uid=82,gid=82 "$REGISTRY/php-base:$PHP_TAG-$STAMP" exec php -v | head -1
+          test "$(docker run --rm "$REGISTRY/php-base:$PHP_TAG-$STAMP" exec id -u)" = "82"
+          docker run --rm "$REGISTRY/php-base:$PHP_TAG-pdf-$STAMP" exec weasyprint --version
+          C=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18080:8080 -e MAYA_PUBLIC_SMOKE=ok "$REGISTRY/web-base:$NGINX_TAG-$STAMP")
+          for _ in $(seq 1 20); do curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 && break; sleep 1; done
           curl -fsS http://127.0.0.1:18080/config.js | grep -q '"SMOKE": "ok"'
           docker stop -t 3 "$C" >/dev/null
 
@@ -83,7 +93,7 @@ jobs:
           for t in "php-base:$PHP_TAG-$STAMP" "php-base:$PHP_TAG" \
                    "php-base:$PHP_TAG-pdf-$STAMP" "php-base:$PHP_TAG-pdf" \
                    "web-base:$NGINX_TAG-$STAMP" "web-base:$NGINX_TAG"; do
-            docker push "$REGISTRY/maya/$t"
+            docker push "$REGISTRY/$t"
           done
 
       - name: Resumen
@@ -94,9 +104,30 @@ jobs:
             echo
             echo "| Imagen | Tag inmutable | Tag flotante |"
             echo "|---|---|---|"
-            echo "| maya/php-base | \`$PHP_TAG-$STAMP\` | \`$PHP_TAG\` |"
-            echo "| maya/php-base (pdf) | \`$PHP_TAG-pdf-$STAMP\` | \`$PHP_TAG-pdf\` |"
-            echo "| maya/web-base | \`$NGINX_TAG-$STAMP\` | \`$NGINX_TAG\` |"
-            echo
-            echo "Para las apps: \`--build-arg MAYA_PHP_BASE=<registry>/maya/php-base:$PHP_TAG-$STAMP\`"
+            echo "| \`$REGISTRY/php-base\` | \`$PHP_TAG-$STAMP\` | \`$PHP_TAG\` |"
+            echo "| \`$REGISTRY/php-base\` (pdf) | \`$PHP_TAG-pdf-$STAMP\` | \`$PHP_TAG-pdf\` |"
+            echo "| \`$REGISTRY/web-base\` | \`$NGINX_TAG-$STAMP\` | \`$NGINX_TAG\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  maya-common-chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login de helm en GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Una versión publicada no se sobrescribe: si ya existe, se deja como está
+      # (subir la versión en Chart.yaml para publicar cambios).
+      - name: Package & push de maya-common
+        run: |
+          set -eu
+          VERSION=$(awk '/^version:/{print $2}' charts/maya-common/Chart.yaml)
+          if helm show chart "oci://$REGISTRY/charts/maya-common" --version "$VERSION" >/dev/null 2>&1; then
+            echo "maya-common $VERSION ya publicado: no se sobrescribe" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          helm lint charts/maya-common
+          helm package charts/maya-common -d /tmp/chart
+          helm push "/tmp/chart/maya-common-$VERSION.tgz" "oci://$REGISTRY/charts"
+          echo "maya-common $VERSION → \`oci://$REGISTRY/charts/maya-common\`" >> "$GITHUB_STEP_SUMMARY"
