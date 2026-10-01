@@ -27,10 +27,11 @@ use Illuminate\Http\Middleware\HandleCors;
  * ## Trusted proxies resolution (in order)
  * 1. Explicit `'trustProxies'` option (`string|array|false`).
  * 2. Env `TRUSTED_PROXIES` (comma-separated list of IP/CIDR), e.g.
- *    `172.29.71.0/24,10.0.0.0/8`.
+ *    `10.42.0.0/16,10.224.236.0/23`.
  * 3. Fallback `'*'` — convenient for dev/Compose. **In production this is
- *    insecure**: always set `TRUSTED_PROXIES` to the Traefik CIDR (e.g.
- *    `172.29.71.0/24`) in the ConfigMap.
+ *    insecure**: always set `TRUSTED_PROXIES` to the CIDR Traefik connects
+ *    from — the K3s pod CIDR (`10.42.0.0/16` by default). The maya-common
+ *    chart sets it in the ConfigMap (`config.TRUSTED_PROXIES`).
  *
  * ## Options
  * | Key                 | Type                          | Default | Description                                                                  |
@@ -120,8 +121,8 @@ final class CommonMiddleware
         $appEnv = $_ENV['APP_ENV'] ?? getenv('APP_ENV');
         if (is_string($appEnv) && $appEnv === 'production') {
             throw new \RuntimeException(
-                'TRUSTED_PROXIES must be set explicitly in production (e.g. the Traefik CIDR '
-                .'such as 172.29.71.0/24). Refusing to trust all proxies ("*").'
+                'TRUSTED_PROXIES must be set explicitly in production (the CIDR Traefik connects from, e.g. the K3s '
+                .'pod CIDR such as 10.42.0.0/16). Refusing to trust all proxies ("*").'
             );
         }
 

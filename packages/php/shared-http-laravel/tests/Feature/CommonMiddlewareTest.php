@@ -168,7 +168,7 @@ it('still registers CORS even when trustProxies is disabled', function (): void 
 
 it('reads a single CIDR from the TRUSTED_PROXIES env var', function (): void {
     $spy = makeMiddlewareSpy();
-    putenv('TRUSTED_PROXIES=172.29.71.0/24');
+    putenv('TRUSTED_PROXIES=10.42.0.0/16');
 
     try {
         CommonMiddleware::register($spy);
@@ -177,12 +177,12 @@ it('reads a single CIDR from the TRUSTED_PROXIES env var', function (): void {
     }
 
     $args = $spy->getCallArgs('trustProxies');
-    expect($args['at'])->toBe('172.29.71.0/24');
+    expect($args['at'])->toBe('10.42.0.0/16');
 });
 
 it('splits comma-separated TRUSTED_PROXIES into an array', function (): void {
     $spy = makeMiddlewareSpy();
-    putenv('TRUSTED_PROXIES=172.29.71.0/24, 10.0.0.0/8 ,  ');
+    putenv('TRUSTED_PROXIES=10.42.0.0/16, 10.0.0.0/8 ,  ');
 
     try {
         CommonMiddleware::register($spy);
@@ -191,7 +191,7 @@ it('splits comma-separated TRUSTED_PROXIES into an array', function (): void {
     }
 
     $args = $spy->getCallArgs('trustProxies');
-    expect($args['at'])->toBe(['172.29.71.0/24', '10.0.0.0/8']);
+    expect($args['at'])->toBe(['10.42.0.0/16', '10.0.0.0/8']);
 });
 
 it('falls back to * when TRUSTED_PROXIES is set but empty after trimming', function (): void {
