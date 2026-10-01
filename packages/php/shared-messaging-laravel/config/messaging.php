@@ -25,6 +25,18 @@ return [
         'audit'         => env('MAYA_MESSAGING_EX_AUDIT', 'maya.audit'),
     ],
 
+    /*
+    | Colas estándar (estándar de mensajería Maya: maya_platform/messaging/topology.yaml).
+    | Los consumidores leen su cola de aquí, nunca de un literal. Las crea la infraestructura
+    | (las apps no declaran nada); añadir una cola = entrada en topology.yaml + clave aquí.
+    */
+    'queues' => [
+        'logs_ingest'          => env('MAYA_QUEUE_LOGS_INGEST', 'logs.ingest'),
+        'notifications_ingest' => env('MAYA_QUEUE_NOTIFICATIONS_INGEST', 'notifications.ingest'),
+        'notifications_email'  => env('MAYA_QUEUE_NOTIFICATIONS_EMAIL', 'notifications.email'),
+        'audit_ingest'         => env('MAYA_QUEUE_AUDIT_INGEST', 'audit.ingest'),
+    ],
+
     'publish' => [
         'confirm' => (bool) env('MAYA_MESSAGING_CONFIRM', true),
         'mandatory' => (bool) env('MAYA_MESSAGING_MANDATORY', false),

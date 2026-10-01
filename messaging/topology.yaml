@@ -1,0 +1,96 @@
+# Estándar de mensajería Maya — CATÁLOGO ÚNICO (versión 1)
+#
+# Fuente de verdad de la topología de RabbitMQ que usan TODAS las apps y servicios Maya.
+# Normas y razones: ESTANDAR.md (junto a este fichero). De aquí salen:
+#   - tools/gen_definitions.py   → definiciones de RabbitMQ para cualquier entorno
+#                                  (maya_infra en local, K3s de desarrollo, producción)
+#   - tools/check_app.py         → comprobación de cada app en su CI (build-app.yml)
+#
+# Añadir una app o un servicio = añadir su entrada en `services`. Añadir una cola = una entrada en
+# `queues` (con su consumidor). Nada se declara desde el código de las apps.
+
+version: 1
+
+# Vhost de las apps en los clústeres (K3s de desarrollo y producción). En desarrollo local
+# (maya_infra) cada slot tiene su vhost (`/<slot>`) con ESTA misma topología.
+vhost: /maya
+
+# Conexión de las apps en los clústeres (Service de RabbitMQ en el namespace maya-sync).
+# En desarrollo local (maya_infra): host `maya_rabbitmq` y vhost del slot.
+connection:
+  host: rabbitmq-maya-app.maya-sync.svc.cluster.local
+  port: 5672
+
+# Prefijos y nombres fijos (las reglas exactas, en tools/standard.py).
+dead_letter_exchange: maya.dlx
+dead_letter_queue_prefix: dlq.
+
+# Valores de todas las colas (se aplican con una política por cola, no con argumentos x-*,
+# para poder cambiarlos sin recrear colas).
+queue_defaults:
+  type: classic
+  message_ttl_ms: 604800000      # 7 días
+  max_length: 100000
+  overflow: drop-head            # al llenarse, el mensaje más antiguo va a la DLQ
+
+# Exchanges compartidos. Toda app (kind: app) puede publicar en los marcados `apps_publish`.
+exchanges:
+  maya.logs:
+    type: topic
+    routing_key: "{app}.{severity}"
+    apps_publish: true
+    description: Eventos de log de todas las apps (canal `rabbit` de Laravel y LogPublisher).
+  maya.notifications:
+    type: topic
+    routing_key: "{app}.{type}.{channel}[.critical]"
+    apps_publish: true
+    description: Notificaciones a usuarios; un mensaje por canal, mismo message_id.
+  maya.audit:
+    type: topic
+    routing_key: "{app}.{entity_type}.{action}"
+    apps_publish: true
+    description: Eventos de auditoría (observers y AuditPublisher).
+
+# Colas: cada una tiene UN consumidor (un servicio de `services`) y su DLQ `dlq.<cola>`.
+queues:
+  logs.ingest:
+    exchange: maya.logs
+    bindings: ["*.*"]
+    consumer: maya-logs
+    description: Ingesta de logs de todas las apps → maya_logs (`logs:consume`).
+  notifications.ingest:
+    exchange: maya.notifications
+    bindings: ["#"]
+    consumer: maya-dashboard
+    description: Todas las notificaciones (todos los canales) → maya_dashboard (`notifications:consume`).
+  notifications.email:
+    exchange: maya.notifications
+    # `#.email.critical`: NotificationPublisher añade `.critical` a las críticas.
+    bindings: ["#.email", "#.email.critical"]
+    consumer: n8n
+    description: Canal email → n8n (envío SMTP).
+  audit.ingest:
+    exchange: maya.audit
+    bindings: ["#"]
+    consumer: maya-audit
+    description: Ingesta de auditoría → maya_audit (`audit:consume`).
+
+# Quién se conecta al vhost. Usuario RabbitMQ = id con `-` → `_` (maya-dms → maya_dms).
+#   kind: app       app Maya: publica en los exchanges `apps_publish` y consume sus colas.
+#   kind: service   servicio de plataforma: publica solo en `publishes` y consume sus colas.
+#   logs_to_rabbit  false solo para quien consume logs.ingest (evita el bucle de sus propios logs).
+services:
+  maya-authorization:
+    kind: app
+  maya-dashboard:
+    kind: app
+  maya-dms:
+    kind: app
+  maya-audit:
+    kind: app
+  maya-logs:
+    kind: app
+    logs_to_rabbit: false
+  n8n:
+    kind: service
+    publishes: []

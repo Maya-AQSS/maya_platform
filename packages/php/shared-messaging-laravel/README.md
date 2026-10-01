@@ -4,6 +4,13 @@ RabbitMQ messaging layer for Laravel: typed event publishers (audit, logs, notif
 
 Part of the [ceedcv-maya/maya_platform](https://github.com/Maya-AQSS/maya_platform) mono-repo. Distributed independently for reuse outside the Maya ecosystem.
 
+## Estándar de mensajería
+
+Este paquete es el cliente obligatorio del **estándar de mensajería Maya** (`messaging/ESTANDAR.md`
+en el monorepo `maya_platform`): exchanges, colas (`config('messaging.queues.*')`), claves de
+enrutado y permisos salen del catálogo `messaging/topology.yaml`. El test `MessagingStandardTest`
+falla si la configuración del paquete y el catálogo divergen.
+
 ## Installation
 
 ```bash
