@@ -12,7 +12,7 @@ description: |
   el único fichero propio. El contrato de values está documentado en values.yaml
   y en README.md.
 type: library
-version: 0.2.0
+version: 0.2.1
 appVersion: "0.22.0"
 icon: https://ceedcv.es/favicon.ico
 maintainers:

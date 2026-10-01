@@ -1,11 +1,20 @@
 {{/*
-  Job de migración: hook pre-install / pre-upgrade con la imagen *-worker y
-  args ["migrate"] (php artisan migrate --force).
+  Job de migración con la imagen *-worker y args ["migrate"] (php artisan migrate --force).
 
-  No usa el ConfigMap: en el primer `helm install` los hooks corren antes de que
-  exista, así que recibe la misma configuración inline (maya-common.envInline).
-  Los secretos llegan por Vault Agent (init container) o, sin Vault, por el
-  Secret externo, que debe existir antes de instalar.
+  Hook post-install / pre-upgrade:
+  - post-install: en la primera instalación la ServiceAccount (con la que se
+    autentica el Vault Agent) y el PVC de la app son recursos normales y no
+    existen hasta que Helm crea la release; un hook pre-install no podría
+    arrancar. Los pods de la app arrancan a la vez y se estabilizan cuando la
+    migración termina. No usar `helm install --wait` (esperaría a pods que
+    dependen de la migración): esperar con `kubectl rollout status` después.
+  - pre-upgrade: en las actualizaciones el esquema nuevo existe antes de que
+    arranquen los pods de la versión nueva.
+
+  Recibe la configuración inline (maya-common.envInline) en lugar del ConfigMap,
+  para no depender del orden de creación. Los secretos llegan por Vault Agent
+  (init container) o, sin Vault, por el Secret externo, que debe existir antes
+  de instalar.
 
   before-hook-creation borra el Job anterior antes de crear el nuevo; los
   fallidos se conservan para el postmortem. helm rollback NO revierte el
@@ -21,7 +30,7 @@ metadata:
   labels:
     {{- include "maya-common.componentLabels" (dict "root" . "component" "migrate") | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-weight": {{ .Values.migrate.hookWeight | quote }}
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:

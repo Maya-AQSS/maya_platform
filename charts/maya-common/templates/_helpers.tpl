@@ -61,7 +61,8 @@ app.kubernetes.io/component: {{ .component }}
 */}}
 {{- define "maya-common.image" -}}
 {{- $v := .root.Values -}}
-{{- $tag := $v.image.tag -}}
+{{- /* <componente>.imageTag permite un tag propio (p. ej. el frontend de desarrollo, con los VITE_* de ese entorno). */ -}}
+{{- $tag := (index $v .component | default dict).imageTag | default $v.image.tag -}}
 {{- if not $tag -}}
 {{- fail "image.tag es obligatorio (misma versión semver que el chart)" -}}
 {{- end -}}

@@ -24,6 +24,8 @@ image:
   # Prefijo de las 4 imágenes: <repository>-api, -worker, -reverb, -frontend.
   repository: maya/maya-app
   # Obligatorio. Misma versión semver que el chart (lo fija helmfile / CI).
+  # Un componente puede usar otro tag con <componente>.imageTag (api, worker,
+  # reverb, frontend); p. ej. frontend.imageTag: 1.2.0-dev en desarrollo.
   tag: ""
   pullPolicy: IfNotPresent
   # Creado fuera del chart: kubectl -n <ns> create secret docker-registry regcred ...
@@ -57,7 +59,13 @@ secret:
 # ─── Configuración no sensible (ConfigMap → envFrom en todos los backends) ───
 # Claves en MAYÚSCULAS como en .env. APP_ENV, APP_DEBUG y SESSION_SECURE_COOKIE
 # se fuerzan siempre a producción.
-config: {}
+config:
+  # Proxies de confianza (shared-http-laravel): quien entrega la petición al pod es
+  # Traefik, así que es el pod CIDR del clúster. Producción usa el de K3s por defecto;
+  # el K3s de desarrollo (VM 201) lo sobreescribe con 10.43.0.0/16 (IaC/dev/values).
+  # Sin esta clave, con APP_ENV=production y shared-http-laravel >= 0.21, las apps que
+  # confían en proxies (dms, audit, logs y las nuevas) no arrancan.
+  TRUSTED_PROXIES: "10.42.0.0/16"
 
 # ─── api: nginx + php-fpm ─────────────────────────────────────────────────────
 api:
@@ -193,9 +201,10 @@ reverb:
     periodSeconds: 10
   terminationGracePeriodSeconds: 60
 
-# ─── migrate: Job hook pre-install/pre-upgrade (imagen *-worker) ──────────────
-# Recibe la configuración inline (no depende del ConfigMap, que en el primer
-# install aún no existe). Solo hacia delante: helm rollback no revierte el esquema.
+# ─── migrate: Job hook post-install/pre-upgrade (imagen *-worker) ─────────────
+# post-install: la ServiceAccount y el PVC ya existen en la primera instalación.
+# Recibe la configuración inline (no depende del ConfigMap). Solo hacia delante:
+# helm rollback no revierte el esquema.
 migrate:
   enabled: true
   args: ["migrate"]
