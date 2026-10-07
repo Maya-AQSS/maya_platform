@@ -26,9 +26,12 @@ dead_letter_exchange: maya.dlx
 dead_letter_queue_prefix: dlq.
 
 # Valores de todas las colas (se aplican con una política por cola, no con argumentos x-*,
-# para poder cambiarlos sin recrear colas).
+# para poder cambiarlos sin recrear colas). Salvo el tipo: es un argumento de la cola (x-queue-type) y
+# una cola existente no cambia de tipo; para pasar a quorum hay que borrarla y volver a crearla.
 queue_defaults:
-  type: classic
+  # quorum en todos los entornos (D6 del plan de migración de IaC, 05-10-2026): con 3 nodos de RabbitMQ,
+  # la caída de uno no para ninguna cola. Admite message-ttl, max-length y overflow drop-head.
+  type: quorum
   message_ttl_ms: 604800000      # 7 días
   max_length: 100000
   overflow: drop-head            # al llenarse, el mensaje más antiguo va a la DLQ
