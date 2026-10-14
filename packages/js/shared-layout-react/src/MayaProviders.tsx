@@ -55,7 +55,7 @@ export function MayaProviders({
   )
 
   // bootstrapRealtime: wires up Echo for the service slug.
-  // No-ops when VITE_REVERB_APP_KEY is absent.
+  // No-ops when REVERB_APP_KEY is absent (/config.js or VITE_REVERB_APP_KEY).
   useEffect(() => {
     bootstrapRealtime(serviceSlug, () => Promise.resolve(authService.keycloak.token ?? null))
   }, [serviceSlug, authService])
