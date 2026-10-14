@@ -42,6 +42,11 @@ export type PublicConfigKey =
   | 'REVERB_SCHEME'
   | 'REVERB_APP_KEY'
   | 'REVERB_AUTH_ENDPOINT'
+  // Reverb del dashboard, el que escucha la barra lateral de todas las apps (D37).
+  | 'DASHBOARD_REVERB_HOST'
+  | 'DASHBOARD_REVERB_PORT'
+  | 'DASHBOARD_REVERB_SCHEME'
+  | 'DASHBOARD_REVERB_APP_KEY'
   | 'SESSION_COOKIE_DOMAIN'
   | (string & {});
 
