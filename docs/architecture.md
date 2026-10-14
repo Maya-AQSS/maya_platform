@@ -9,22 +9,30 @@
 │  - CI valida los 13 paquetes                                │
 │  - PRs cross-package en un solo lugar                       │
 └────────────────────────┬────────────────────────────────────┘
-                         │ split (sub-tree)
-                         │ en cada push a main y en cada tag
+                         │ tag vX.Y.Z
+                         │ split (sub-tree) + release.yml
                          ▼
 ┌────────────────────────────────────────────────────────────┐
 │  13 repos read-only (Maya-AQSS/shared-*)                   │
-│  - generados automáticamente                               │
+│  - generados automáticamente (split)                        │
 │  - tags semver propagados                                  │
-│  - los consumidores los instalan vía Composer/npm          │
 └────────────────────────────────────────────────────────────┘
-                         │
+         │ (Packagist auto-detecta)  │ (npm publish.yml)
+         ▼                           ▼
+   ┌──────────────┐           ┌──────────────┐
+   │  Packagist   │           │  npm registry│
+   │ ceedcv-maya/ │           │@ceedcv-maya/ │
+   └──────┬───────┘           └──────┬───────┘
+          │                          │
+          └──────────────┬───────────┘
                          ▼
-┌────────────────────────────────────────────────────────────┐
-│  5 microservicios Maya                                     │
-│  - composer require maya/shared-auth-laravel ^0.1          │
-│  - npm i github:Maya-AQSS/shared-auth-react#v0.1.0         │
-└────────────────────────────────────────────────────────────┘
+        ┌────────────────────────────────────────┐
+        │  5 microservicios (producción)         │
+        │  - composer: ceedcv-maya/* ^0.21       │
+        │  - npm: @ceedcv-maya/* ^0.21.0         │
+        │  sin VCS repos (desarrollo: composer   │
+        │    local.json / pnpm link)             │
+        └────────────────────────────────────────┘
 ```
 
 ## Por qué este modelo
@@ -34,8 +42,9 @@
 - **CI unificada.** Una matriz que conoce los 13 paquetes, no 13 CIs separados.
 - **Distribución natural.** Los consumidores instalan desde repos limpios y
   dedicados, sin ver el ruido del mono-repo.
-- **Migración gradual a Packagist/npm.** Cuando estabilicemos `1.0.0`,
-  publicar es solo añadir tokens — los consumidores no cambian nada.
+- **Publicación automatizada en Packagist/npm.** Cada tag dispara workflows
+  que publican en ambos registries. Los consumidores instalan desde registries
+  públicos sin VCS repos (excepto desarrollo local, donde usan `composer.local.json`).
 
 ## Cómo funciona el split
 

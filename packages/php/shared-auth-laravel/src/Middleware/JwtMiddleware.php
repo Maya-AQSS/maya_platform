@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 use Lcobucci\JWT\Configuration;
 use Lcobucci\JWT\Signer\Key\InMemory;
 use Lcobucci\JWT\Signer\Rsa\Sha256;
+use Lcobucci\JWT\Token\RegisteredClaims;
 use Lcobucci\JWT\Validation\Constraint\IssuedBy;
 use Lcobucci\JWT\Validation\Constraint\SignedWith;
 use Lcobucci\JWT\Validation\Constraint\LooseValidAt;
@@ -22,6 +23,9 @@ use Symfony\Component\HttpFoundation\Response;
 
 class JwtMiddleware
 {
+    /** Claim `typ` de los tokens de acceso de Keycloak. */
+    private const ACCESS_TOKEN_TYPE = 'Bearer';
+
     public function __construct(
         private readonly JwksServiceInterface $jwksService,
     ) {}
@@ -132,10 +136,42 @@ class JwtMiddleware
         $token = $config->parser()->parse($rawToken);
         $config->validator()->assert($token, ...$config->validationConstraints());
 
+        // LooseValidAt solo comprueba `exp` si viene: un token sin caducidad valdría para
+        // siempre. StrictValidAt no sirve porque exige también `nbf`, que Keycloak no emite.
+        if (! $token->claims()->has(RegisteredClaims::EXPIRATION_TIME)) {
+            throw new RuntimeException('JWT missing exp claim');
+        }
+
         $claims = $token->claims()->all();
+        $this->assertAccessTokenType($claims);
         $this->assertAudienceOrAuthorizedParty($claims, config('auth.jwt_audience'));
 
         return $claims;
+    }
+
+    /**
+     * Solo se aceptan tokens de acceso. Keycloak emite varios tipos de token con el mismo
+     * emisor y los distingue por el claim `typ`: `Bearer` (acceso), `ID` (ID token),
+     * `Refresh`, `Offline`, `Logout`... El ID token se firma con la misma clave RS256 y
+     * lleva el cliente de la SPA en `aud` y `azp`, así que sin esta comprobación pasaría
+     * como token de acceso.
+     *
+     * Un token sin `typ` también se rechaza: Keycloak lo pone siempre, así que un token
+     * sin él no es un token de acceso de Keycloak.
+     *
+     * @param array<string, mixed> $claims
+     */
+    private function assertAccessTokenType(array $claims): void
+    {
+        $type = $claims['typ'] ?? null;
+
+        if ($type !== self::ACCESS_TOKEN_TYPE) {
+            throw new RuntimeException(sprintf(
+                'JWT is not an access token. expected typ=%s, typ=%s',
+                self::ACCESS_TOKEN_TYPE,
+                is_string($type) ? $type : 'null',
+            ));
+        }
     }
 
     /**

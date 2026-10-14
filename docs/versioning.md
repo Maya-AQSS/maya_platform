@@ -17,7 +17,7 @@ Mientras estemos en 0.x:
 - Los **MINOR pueden incluir breaking changes** documentados en CHANGELOG.
   Esto es estándar semver en pre-1.0.
 - Los **consumidores deben pinear a `^0.X`** (no `^0`).
-- Para Composer: `"maya/shared-auth-laravel": "^0.1"` significa `>=0.1.0 <0.2`.
+- Para Composer: `"ceedcv-maya/shared-auth-laravel": "^0.1"` significa `>=0.1.0 <0.2`.
 - Para npm con `github:`: pinea a tag concreto `#v0.1.0`, no `#main`.
 
 ## Política de soporte

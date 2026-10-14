@@ -51,6 +51,9 @@ final class Migrations
      *  - `user_studies`
      *  - `user_course_modules`
      *
+     * `user_id` es el `sub` de Keycloak, que en Odoo es `res_users.oauth_uid` (D26 R4);
+     * desde 2026_10_14_000001, no `keycloak_user_id` (no existe en producción).
+     *
      * Tablas en testing, source+FDW+vista en local, FDW remoto en prod.
      */
     public static function academicAssignments(): string

@@ -21,7 +21,7 @@ erDiagram
     JOBS ||--o{ JOB_BATCHES : "pertenece a"
 
     USERS {
-        varchar_255 id PK "UUID Keycloak"
+        varchar_255 id PK "UUID Keycloak = res_users.oauth_uid"
         varchar_255 name "display_name Odoo"
         varchar_255 email UK "correo"
         varchar_150 first_name
@@ -77,7 +77,7 @@ erDiagram
 
     USER_STUDY_TYPES {
         varchar_255 id PK "md5 hash"
-        varchar_255 user_id FK "keycloak_user_id (lógico)"
+        varchar_255 user_id FK "res_users.oauth_uid (lógico)"
         varchar_255 study_type_id FK "res_company.id::text (lógico)"
         timestamp created_at "NULL en FDW"
         timestamp updated_at "NULL en FDW"
@@ -85,7 +85,7 @@ erDiagram
 
     USER_STUDIES {
         varchar_255 id PK "md5 hash"
-        varchar_255 user_id FK "keycloak_user_id (lógico)"
+        varchar_255 user_id FK "res_users.oauth_uid (lógico)"
         varchar_255 study_id FK "maya_core_study.id::text (lógico)"
         timestamp created_at "s.create_date"
         timestamp updated_at "s.write_date"
@@ -93,7 +93,7 @@ erDiagram
 
     USER_COURSE_MODULES {
         varchar_255 id PK "md5 hash"
-        varchar_255 user_id FK "keycloak_user_id (lógico)"
+        varchar_255 user_id FK "res_users.oauth_uid (lógico)"
         varchar_255 module_id FK "{study_id}_{subject_id} (lógico)"
         timestamp created_at "maya_core_subject_employee_rel.create_date"
         timestamp updated_at "maya_core_subject_employee_rel.write_date"
@@ -148,9 +148,9 @@ erDiagram
 | `study_types` | VISTA derivada (FDW + filtro) | `res_company` (hijas, excluye root id=1) | `/packages/php/shared-profile-laravel/database/migrations/academic-catalogs/2026_05_22_000000_create_study_types_catalog_foreign_table.php:8` |
 | `studies` | FDW Odoo (read-only, filtrado) | `maya_core_study` (active=true) | `/packages/php/shared-profile-laravel/database/migrations/academic-catalogs/2026_05_22_000001_create_studies_catalog_foreign_table.php:8` |
 | `course_modules` | VISTA derivada (JOIN FDW) | `maya_core_study_maya_core_subject_rel` + `maya_core_subject` | `/packages/php/shared-profile-laravel/database/migrations/academic-catalogs/2026_05_22_000002_create_course_modules_catalog_foreign_table.php:8` |
-| `user_study_types` | VISTA derivada (JOIN FDW) | `res_company_users_rel` + `res_users` | `/packages/php/shared-profile-laravel/database/migrations/academic-assignments/2026_05_18_000003_create_user_study_types_foreign_table.php:8` |
-| `user_studies` | VISTA derivada (JOIN FDW) | `res_company_users_rel` + `maya_core_study` + `res_users` | `/packages/php/shared-profile-laravel/database/migrations/academic-assignments/2026_05_18_000004_create_user_studies_foreign_table.php:8` |
-| `user_course_modules` | VISTA derivada (JOIN FDW) | `maya_core_subject_employee_rel` + `maya_core_employee` + `res_users` | `/packages/php/shared-profile-laravel/database/migrations/academic-assignments/2026_05_18_000005_create_user_course_modules_foreign_table.php:8` |
+| `user_study_types` | VISTA derivada (JOIN FDW) | `res_company_users_rel` + `res_users` (`oauth_uid`) | `/packages/php/shared-profile-laravel/database/migrations/academic-assignments/2026_10_14_000001_link_academic_assignments_by_oauth_uid.php` (antes `2026_05_18_000003`) |
+| `user_studies` | VISTA derivada (JOIN FDW) | `res_company_users_rel` + `maya_core_study` + `res_users` (`oauth_uid`) | `/packages/php/shared-profile-laravel/database/migrations/academic-assignments/2026_10_14_000001_link_academic_assignments_by_oauth_uid.php` (antes `2026_05_18_000004`) |
+| `user_course_modules` | VISTA derivada (JOIN FDW) | `maya_core_subject_employee_rel` + `maya_core_employee` + `res_users` (`oauth_uid`) | `/packages/php/shared-profile-laravel/database/migrations/academic-assignments/2026_10_14_000001_link_academic_assignments_by_oauth_uid.php` (antes `2026_05_18_000005`) |
 | `user_resolved_permissions` | FDW maya_auth (read-only) | `v_<app>_user_permissions` (dinámica) | `/packages/php/shared-profile-laravel/database/migrations/user-permissions/2026_05_18_000010_create_user_resolved_permissions_view.php:21` |
 
 ### Tablas de framework/sistema

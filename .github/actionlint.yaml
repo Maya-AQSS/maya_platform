@@ -1,0 +1,7 @@
+# actionlint todavía no conoce `job.workflow_sha` (contexto `job` de GitHub Actions: commit del
+# fichero del workflow reutilizable; documentado en docs.github.com › Contexts). build-app.yml lo usa
+# para descargar el estándar de mensajería de la misma versión que el workflow.
+paths:
+  .github/workflows/build-app.yml:
+    ignore:
+      - 'property "workflow_sha" is not defined in object type'

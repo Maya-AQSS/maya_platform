@@ -11,7 +11,7 @@
  * import { oidcAuthService } from '../auth/oidcAdapter'
  *
  * export const { apiFetchJson, apiGetJson, buildApiUrl, getBearerToken, ApiHttpError } =
- *   createApiClient(oidcAuthService.keycloak, import.meta.env.VITE_API_URL)
+ *   createApiClient(oidcAuthService.keycloak, publicConfig('API_URL'))
  */
 import type Keycloak from 'keycloak-js'
 

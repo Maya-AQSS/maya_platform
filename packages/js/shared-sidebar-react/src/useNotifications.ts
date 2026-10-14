@@ -117,9 +117,10 @@ function parseUnreadCount(payload: unknown): number {
  * backend. The list and the unread count are exposed together so a <Bell/>
  * component can render a badge without a second round-trip.
  *
- * Si `NotificationProvider` está en el árbol y `VITE_REVERB_*` está configurado,
- * se suscribe al canal WebSocket `private-notifications.{userId}` en vez de
- * hacer polling. La carga inicial siempre usa HTTP para hidratar la lista.
+ * Si `NotificationProvider` está en el árbol y `REVERB_*` está configurado
+ * (`/config.js` o `VITE_REVERB_*`), se suscribe al canal WebSocket
+ * `private-notifications.{userId}` y, confirmada la suscripción, deja de hacer
+ * polling. La carga inicial siempre usa HTTP para hidratar la lista.
  * El fallback a polling HTTP es automático cuando no hay WebSocket disponible.
  *
  * La interfaz externa del hook NO cambia (retrocompatibilidad garantizada).

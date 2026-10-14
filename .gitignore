@@ -41,3 +41,6 @@ Thumbs.db
 # transitive imports from shared package sources resolve to the consumer's
 # node_modules. See vite.config.ts in maya_{dms,logs,dashboard}/frontend/.
 packages/js/shared-*/node_modules
+
+# Almacén de pnpm creado al construir las imágenes en local
+.pnpm-store/

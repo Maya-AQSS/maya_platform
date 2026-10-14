@@ -1,0 +1,71 @@
+# maya/web-base — bloque server de la SPA. Lo renderiza maya-web-entrypoint con
+# envsubst (solo ${MAYA_CSP_HEADER}); el resto de `$variables` son de nginx.
+
+server {
+    listen 8080 default_server;
+    server_name _;
+    root  /usr/share/nginx/html;
+    index index.html;
+    charset utf-8;
+
+    # Cabeceras de seguridad. Ojo: add_header en un bloque hijo SUSTITUYE a las
+    # del padre, por eso se repiten en las locations que añaden Cache-Control.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    ${MAYA_CSP_HEADER}
+
+    # Liveness/readiness.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Configuración en ejecución generada por el entrypoint (MAYA_PUBLIC_*).
+    location = /config.js {
+        alias /tmp/maya/www/config.js;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        ${MAYA_CSP_HEADER}
+    }
+
+    # Assets con hash de Vite: inmutables.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        ${MAYA_CSP_HEADER}
+        try_files $uri =404;
+    }
+
+    # Ficheros estáticos sueltos (favicon, manifest, fuentes en public/).
+    location ~* \.(?:ico|png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot|webmanifest)$ {
+        add_header Cache-Control "public, max-age=2592000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        ${MAYA_CSP_HEADER}
+        try_files $uri =404;
+    }
+
+    # SPA: index.html nunca se cachea (referencia a assets con hash nuevo).
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        ${MAYA_CSP_HEADER}
+        try_files $uri $uri/ /index.html;
+    }
+
+    location ~ /\. {
+        deny all;
+    }
+}

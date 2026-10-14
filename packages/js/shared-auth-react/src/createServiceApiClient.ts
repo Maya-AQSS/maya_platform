@@ -8,11 +8,11 @@
  *
  * @example
  * // src/api/http.ts (en cualquier app Maya)
- * import { createServiceApiClient } from '@ceedcv-maya/shared-auth-react';
+ * import { createServiceApiClient, publicConfig } from '@ceedcv-maya/shared-auth-react';
  * import { oidcAuthService } from '../auth/oidcAdapter';
  *
  * export const { apiFetchJson, apiGetJson, buildApiUrl, getBearerToken } =
- *   createServiceApiClient('dashboard-api', oidcAuthService.keycloak, import.meta.env.VITE_API_URL);
+ *   createServiceApiClient('dashboard-api', oidcAuthService.keycloak, publicConfig('API_URL'));
  */
 import type Keycloak from 'keycloak-js';
 import { createApiClient, type ApiClient } from './apiClient';
@@ -26,7 +26,7 @@ import { resolveServiceUrl } from './peerService';
  *                       Used by `peerOrigin()` to derive the base URL when no
  *                       `envOverride` is provided.
  * @param keycloak     - Keycloak instance used to attach Bearer tokens.
- * @param envOverride  - Optional explicit base URL (e.g. `import.meta.env.VITE_API_URL`).
+ * @param envOverride  - Optional explicit base URL (e.g. `publicConfig('API_URL')`).
  *                       When defined and non-empty, it takes precedence over the
  *                       derived peer origin. The `/api/v1` path segment must be
  *                       included in the override.

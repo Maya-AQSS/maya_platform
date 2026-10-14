@@ -1,0 +1,45 @@
+name: messaging-standard
+# Estándar de mensajería Maya (messaging/): valida el catálogo, genera las definiciones de
+# RabbitMQ en todos los modos y comprueba que el paquete shared-messaging-laravel declara las
+# mismas colas (test MessagingStandardTest, en ci-php.yml). Cualquier cambio en el catálogo pasa por aquí.
+
+on:
+  push:
+    branches: [main, plan-dev-k3s]
+    paths:
+      - "messaging/**"
+      - "packages/php/shared-messaging-laravel/config/**"
+      - ".github/workflows/messaging.yml"
+  pull_request:
+    paths:
+      - "messaging/**"
+      - "packages/php/shared-messaging-laravel/config/**"
+      - ".github/workflows/messaging.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  standard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet pyyaml
+      - name: Catálogo válido
+        run: python3 messaging/tools/gen_definitions.py --check
+      - name: Definiciones generables (todos los modos)
+        env:
+          RABBITMQ_ADMIN_PASSWORD: ci
+        run: |
+          set -euo pipefail
+          for s in $(python3 messaging/tools/gen_definitions.py --permissions | cut -f1); do
+            suffix=$(echo "$s" | sed 's/^maya_//' | tr '[:lower:]' '[:upper:]')
+            export "RABBITMQ_PASSWORD_${suffix}=ci"
+          done
+          python3 messaging/tools/gen_definitions.py --passwords env --admin | python3 -m json.tool >/dev/null
+          python3 messaging/tools/gen_definitions.py --passwords vault | python3 -m json.tool >/dev/null
+          python3 messaging/tools/gen_definitions.py --scope vhost --vhost /ci | python3 -m json.tool >/dev/null
+          python3 messaging/tools/gen_definitions.py --permissions

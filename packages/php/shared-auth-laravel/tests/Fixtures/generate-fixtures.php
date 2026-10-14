@@ -11,6 +11,9 @@
  *   - expected-pem.pem   — The correct PEM for the test key (reference)
  *   - jwt-valid.txt      — RS256 JWT signed with the test private key
  *   - jwt-expired.txt    — RS256 JWT with exp in the past
+ *
+ * Los tokens llevan `typ: Bearer` (token de acceso de Keycloak): JwtMiddleware
+ * rechaza los demás tipos. El emisor es el de tests/TestCase.php.
  */
 
 require_once __DIR__ . '/../../vendor/autoload.php';
@@ -66,18 +69,20 @@ $config = Configuration::forAsymmetricSigner(
 );
 
 $now = new DateTimeImmutable('2026-05-09T12:00:00Z');
+$issuer = 'http://keycloak.localhost/realms/maya';
 
-// Valid token (expires in 1 year — test vector, not production)
+// Valid token (expires in 10 years — test vector, not production)
 $validToken = $config->builder()
-    ->issuedBy('https://keycloak.maya.test/realms/maya')
+    ->issuedBy($issuer)
     ->permittedFor('maya-test-service')
     ->relatedTo('test-user-uuid-0001')
+    ->withClaim('typ', 'Bearer')
     ->withClaim('azp', 'maya-test-service')
     ->withClaim('realm_access', ['roles' => ['admin', 'user']])
     ->withClaim('email', 'test@maya.localhost')
     ->withClaim('name', 'Test User')
     ->withHeader('kid', $kid)
-    ->expiresAt($now->modify('+1 year'))
+    ->expiresAt($now->modify('+10 years'))
     ->issuedAt($now)
     ->getToken(new Sha256(), InMemory::plainText($privateKeyPem));
 
@@ -85,9 +90,10 @@ file_put_contents("{$dir}/jwt-valid.txt", $validToken->toString());
 
 // Expired token (exp = 1 second after issuance)
 $expiredToken = $config->builder()
-    ->issuedBy('https://keycloak.maya.test/realms/maya')
+    ->issuedBy($issuer)
     ->permittedFor('maya-test-service')
     ->relatedTo('test-user-uuid-0001')
+    ->withClaim('typ', 'Bearer')
     ->withHeader('kid', $kid)
     ->expiresAt($now->modify('-1 hour'))
     ->issuedAt($now->modify('-2 hours'))
@@ -97,11 +103,12 @@ file_put_contents("{$dir}/jwt-expired.txt", $expiredToken->toString());
 
 // Wrong-audience token (aud = 'other-service', azp unset)
 $wrongAudToken = $config->builder()
-    ->issuedBy('https://keycloak.maya.test/realms/maya')
+    ->issuedBy($issuer)
     ->permittedFor('completely-other-service')
     ->relatedTo('test-user-uuid-0001')
+    ->withClaim('typ', 'Bearer')
     ->withHeader('kid', $kid)
-    ->expiresAt($now->modify('+1 year'))
+    ->expiresAt($now->modify('+10 years'))
     ->issuedAt($now)
     ->getToken(new Sha256(), InMemory::plainText($privateKeyPem));
 
@@ -115,9 +122,10 @@ $noKidConfig = Configuration::forAsymmetricSigner(
 );
 
 $noKidToken = $noKidConfig->builder()
-    ->issuedBy('https://keycloak.maya.test/realms/maya')
+    ->issuedBy($issuer)
     ->relatedTo('test-user-uuid-0001')
-    ->expiresAt($now->modify('+1 year'))
+    ->withClaim('typ', 'Bearer')
+    ->expiresAt($now->modify('+10 years'))
     ->issuedAt($now)
     ->getToken(new Sha256(), InMemory::plainText($privateKeyPem));
 

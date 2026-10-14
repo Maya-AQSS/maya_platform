@@ -17,9 +17,11 @@ use Throwable;
  * carries the same `message_id`, so the ingest consumer dedupes and persists
  * the notification once regardless of how many channels were requested.
  *
- *   Routing key:  <app>.<type>.<channel>
- *   Bindings:     notifications.ingest  (*.*.*)   — always (dedup by message_id)
- *                 notifications.email   (*.*.email) — SMTP fan-out (n8n)
+ *   Routing key:  <app>.<type>.<channel>, plus `.critical` when severity is critical/high
+ *   Bindings:     notifications.ingest  (#)                          — always (dedup by message_id)
+ *                 notifications.email   (#.email, #.email.critical)  — SMTP fan-out (n8n)
+ *   `<type>` may contain dots (document.approved), so the bindings use `#`, not `*.*.*`.
+ *   Topology and contract: DOCUMENTATION/.../servicios/rabbitmq-contracts.md
  */
 class NotificationPublisher
 {

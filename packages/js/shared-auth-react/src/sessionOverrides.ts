@@ -23,6 +23,7 @@
  * compartido (Redis con TTL, BroadcastChannel sobre dominio común, …).
  */
 import { getDomain } from 'tldts'
+import { publicConfig } from './runtimeConfig'
 import { readCachedUserProfile, USER_PROFILE_STORAGE_KEY, writeCachedUserProfile } from './userProfileCache'
 
 const COOKIE_NAME = 'maya_session_overrides'
@@ -94,7 +95,8 @@ function extractIPv4DottedQuad(labels: string[]): string | null {
  * de entorno por defecto, se adapta sola a dev/staging/prod.
  *
  * Algoritmo:
- *   1. Override explícito vía `VITE_SESSION_COOKIE_DOMAIN` (escape hatch).
+ *   1. Override explícito vía la clave pública `SESSION_COOKIE_DOMAIN`
+ *      (`MAYA_PUBLIC_` en /config.js o `VITE_`; escape hatch).
  *   2. PSL via `tldts.getDomain(host)` — devuelve el dominio registrable
  *      (el label inmediatamente debajo del sufijo público). Funciona con TLDs
  *      compuestos (`.co.uk`, `.com.mx`, …) sin parchear nada.
@@ -113,11 +115,8 @@ function getCookieDomain(): string {
   if (typeof window === 'undefined') return 'maya.test'
   const host = window.location.hostname
 
-  const fromEnv =
-    typeof import.meta !== 'undefined'
-      ? (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_SESSION_COOKIE_DOMAIN
-      : undefined
-  if (fromEnv) return fromEnv
+  const fromConfig = publicConfig('SESSION_COOKIE_DOMAIN')
+  if (fromConfig) return fromConfig
 
   const registrable = getDomain(host, { allowPrivateDomains: false })
 

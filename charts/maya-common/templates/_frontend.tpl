@@ -1,18 +1,21 @@
 {{/*
-  Frontend Deployment (nginx serving the Vite-built bundle).
+  Deployment frontend: imagen *-frontend (maya/web-base, nginx uid 101, puerto 8080).
+  Solo escribe en /tmp. La configuración en ejecución llega por el ConfigMap
+  -frontend-config (MAYA_PUBLIC_* → /config.js, MAYA_CSP).
 */}}
 {{- define "maya-common.frontend" -}}
 {{- if .Values.frontend.enabled -}}
-{{- $component := "frontend" -}}
+{{- $c := "frontend" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "maya-common.componentName" (dict "root" . "component" $component) }}
+  name: {{ include "maya-common.componentName" (dict "root" . "component" $c) }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "maya-common.componentLabels" (dict "root" . "component" $component) | nindent 4 }}
+    {{- include "maya-common.componentLabels" (dict "root" . "component" $c) | nindent 4 }}
 spec:
   replicas: {{ .Values.frontend.replicas }}
+  revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -20,30 +23,35 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $component) | nindent 6 }}
+      {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $c) | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $component) | nindent 8 }}
-      {{- with .Values.frontend.podAnnotations }}
+        {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" $c) | nindent 8 }}
       annotations:
+        checksum/config: {{ include "maya-common.frontendConfigmap" . | sha256sum }}
+        {{- with .Values.frontend.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      automountServiceAccountToken: false
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 30 }}
+        {{- toYaml .Values.frontend.securityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       containers:
         - name: web
-          image: {{ include "maya-common.image" (dict "root" .Values "componentImage" .Values.frontend.image) }}
-          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          image: {{ include "maya-common.image" (dict "root" . "component" "frontend") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "maya-common.fullname" . }}-frontend-config
           ports:
             - name: http
-              containerPort: {{ .Values.frontend.containerPort | default 8080 }}
+              containerPort: {{ .Values.frontend.port }}
               protocol: TCP
           livenessProbe:
             {{- toYaml .Values.frontend.livenessProbe | nindent 12 }}
@@ -56,21 +64,21 @@ spec:
           lifecycle:
             {{- include "maya-common.preStop" . | nindent 12 }}
           volumeMounts:
-            - name: nginx-tmp
-              mountPath: /var/cache/nginx
-            - name: nginx-run
-              mountPath: /var/run
             - name: tmp
               mountPath: /tmp
       volumes:
-        - name: nginx-tmp
-          emptyDir: {}
-        - name: nginx-run
-          emptyDir: {}
         - name: tmp
           emptyDir: {}
       {{- with .Values.frontend.nodeSelector }}
       nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.affinity }}
+      affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end -}}

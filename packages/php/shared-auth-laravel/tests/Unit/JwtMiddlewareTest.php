@@ -4,6 +4,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Lcobucci\JWT\Configuration;
+use Lcobucci\JWT\Signer\Key\InMemory;
+use Lcobucci\JWT\Signer\Rsa\Sha256;
 use Maya\Auth\Contracts\JwksServiceInterface;
 use Maya\Auth\JwksService;
 use Maya\Auth\Middleware\JwtMiddleware;
@@ -25,6 +28,62 @@ function loadToken(string $name): string
 function jwtMiddleware(): JwtMiddleware
 {
     return app(JwtMiddleware::class);
+}
+
+/**
+ * Firma en el momento un token como los de Keycloak (clave y kid de los fixtures, emisor y
+ * audiencia de TestCase), con `typ: Bearer` y caducidad dentro de 5 minutos por defecto.
+ * $claims sobreescribe o añade claims (null quita el claim); $expiresIn null = sin `exp`.
+ *
+ * @param array<string, mixed> $claims
+ */
+function mintToken(array $claims = [], ?string $expiresIn = '+5 minutes'): string
+{
+    $fixtures = __DIR__ . '/../Fixtures';
+    $config = Configuration::forAsymmetricSigner(
+        new Sha256(),
+        InMemory::plainText(file_get_contents("{$fixtures}/test-private.pem")),
+        InMemory::plainText(file_get_contents("{$fixtures}/test-public.pem")),
+    );
+
+    $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    $builder = $config->builder()
+        ->issuedBy(config('auth.jwt_issuer'))
+        ->permittedFor('maya-test-service')
+        ->relatedTo('test-user-uuid-0001')
+        ->withHeader('kid', 'test-key-2026')
+        ->issuedAt($now->modify('-1 minute'));
+
+    $claims = array_merge(['typ' => 'Bearer', 'azp' => 'maya-test-service'], $claims);
+    foreach ($claims as $name => $value) {
+        if ($value !== null) {
+            $builder = $builder->withClaim($name, $value);
+        }
+    }
+
+    if ($expiresIn !== null) {
+        $builder = $builder->expiresAt($now->modify($expiresIn));
+    }
+
+    return $builder->getToken($config->signer(), $config->signingKey())->toString();
+}
+
+/**
+ * Pasa el token por el middleware y devuelve [código HTTP, entrada de log del fallo o null].
+ *
+ * @return array{0: int, 1: array<string, mixed>|null}
+ */
+function handleAndCaptureFailure(string $token): array
+{
+    $logged = [];
+    Log::listen(function ($event) use (&$logged) {
+        $logged[] = ['level' => $event->level, 'message' => $event->message, 'context' => $event->context];
+    });
+
+    $response = jwtMiddleware()->handle(makeRequest($token), fn ($r) => response()->json(['ok' => true]));
+    $entry = collect($logged)->first(fn ($e) => $e['message'] === 'JWT authentication failed');
+
+    return [$response->getStatusCode(), $entry];
 }
 
 beforeEach(function () {
@@ -111,6 +170,56 @@ it('logs malformed/invalid token at warning level with JWT-INVALID code', functi
     expect($entry)->not->toBeNull();
     expect($entry['level'])->toBe('warning');
     expect($entry['context']['error_code'])->toBe('JWT-INVALID');
+});
+
+// ─── exp obligatorio y solo tokens de acceso (typ = Bearer) ────────────────
+
+it('accepts a freshly minted access token (typ Bearer, exp in 5 minutes)', function () {
+    [$status, $failure] = handleAndCaptureFailure(mintToken());
+    expect($status)->toBe(200);
+    expect($failure)->toBeNull();
+});
+
+it('returns 401 for a token without exp (LooseValidAt would let it live forever)', function () {
+    [$status, $failure] = handleAndCaptureFailure(mintToken(expiresIn: null));
+    expect($status)->toBe(401);
+    expect($failure['level'])->toBe('warning');
+    expect($failure['context']['error_code'])->toBe('JWT-INVALID');
+    expect($failure['context']['reason'])->toContain('JWT missing exp claim');
+});
+
+it('returns 401 for an access token expired a minute ago, logged as JWT-EXPIRED', function () {
+    [$status, $failure] = handleAndCaptureFailure(mintToken(expiresIn: '-1 minute'));
+    expect($status)->toBe(401);
+    expect($failure['level'])->toBe('info');
+    expect($failure['context']['error_code'])->toBe('JWT-EXPIRED');
+});
+
+it('returns 401 for a Keycloak ID token (typ ID), even with the right aud and azp', function () {
+    [$status, $failure] = handleAndCaptureFailure(mintToken(['typ' => 'ID']));
+    expect($status)->toBe(401);
+    expect($failure['level'])->toBe('warning');
+    expect($failure['context']['error_code'])->toBe('JWT-INVALID');
+    expect($failure['context']['reason'])->toContain('expected typ=Bearer, typ=ID');
+});
+
+it('returns 401 for a Keycloak refresh token (typ Refresh)', function () {
+    [$status, $failure] = handleAndCaptureFailure(mintToken(['typ' => 'Refresh']));
+    expect($status)->toBe(401);
+    expect($failure['context']['error_code'])->toBe('JWT-INVALID');
+    expect($failure['context']['reason'])->toContain('typ=Refresh');
+});
+
+it('returns 401 for a token without typ (Keycloak always sets it)', function () {
+    [$status, $failure] = handleAndCaptureFailure(mintToken(['typ' => null]));
+    expect($status)->toBe(401);
+    expect($failure['context']['error_code'])->toBe('JWT-INVALID');
+    expect($failure['context']['reason'])->toContain('typ=null');
+});
+
+it('returns 401 for typ with another case (bearer): the comparison is exact', function () {
+    [$status] = handleAndCaptureFailure(mintToken(['typ' => 'bearer']));
+    expect($status)->toBe(401);
 });
 
 // ─── Unknown kid ───────────────────────────────────────────────────────────

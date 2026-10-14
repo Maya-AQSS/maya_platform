@@ -1,24 +1,24 @@
 {{/*
-  ClusterIP Services for backend, frontend and reverb. Names are stable so
-  east-west callers (e.g. audit → authz) can rely on:
-    <release-fullname>-backend.<ns>.svc.cluster.local
+  Services ClusterIP con nombres estables para el este-oeste:
+    <nombre completo>-api.<ns>.svc.cluster.local:8080
+    <nombre completo>-reverb.<ns>.svc.cluster.local:8080   (REVERB_HOST de los backends)
 */}}
 {{- define "maya-common.service" -}}
-{{- if .Values.backend.enabled }}
+{{- if .Values.api.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "maya-common.componentName" (dict "root" . "component" "backend") }}
+  name: {{ include "maya-common.componentName" (dict "root" . "component" "api") }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "maya-common.componentLabels" (dict "root" . "component" "backend") | nindent 4 }}
+    {{- include "maya-common.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
-    {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" "backend") | nindent 4 }}
+    {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" "api") | nindent 4 }}
   ports:
     - name: http
-      port: {{ .Values.backend.httpPort | default 8000 }}
+      port: {{ .Values.api.port }}
       targetPort: http
       protocol: TCP
 {{- end }}
@@ -37,7 +37,7 @@ spec:
     {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" "frontend") | nindent 4 }}
   ports:
     - name: http
-      port: {{ .Values.frontend.containerPort | default 8080 }}
+      port: {{ .Values.frontend.port }}
       targetPort: http
       protocol: TCP
 {{- end }}
@@ -56,7 +56,7 @@ spec:
     {{- include "maya-common.componentSelectorLabels" (dict "root" . "component" "reverb") | nindent 4 }}
   ports:
     - name: ws
-      port: {{ .Values.reverb.containerPort | default 8080 }}
+      port: {{ .Values.reverb.port }}
       targetPort: ws
       protocol: TCP
 {{- end }}
