@@ -26,7 +26,8 @@ use Illuminate\Support\Facades\DB;
  *   Odoo vive en otro host.
  *
  * Columnas expuestas en la vista local `users`:
- *   id            — UUID de Keycloak (varchar 255)
+ *   id            — UUID de Keycloak (varchar 255); en Odoo, `res_users.oauth_uid`
+ *                   (D26 R4): `v_app_users` debe proyectarlo como `id`
  *   name          — display_name de Odoo
  *   email         — correo único
  *   first_name    — nombre (maya_core_employee.name)
