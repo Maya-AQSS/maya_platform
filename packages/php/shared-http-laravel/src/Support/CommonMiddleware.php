@@ -31,7 +31,10 @@ use Illuminate\Http\Middleware\HandleCors;
  * 3. Fallback `'*'` — convenient for dev/Compose. **In production this is
  *    insecure**: always set `TRUSTED_PROXIES` to the CIDR Traefik connects
  *    from — the K3s pod CIDR (`10.42.0.0/16` by default). The maya-common
- *    chart sets it in the ConfigMap (`config.TRUSTED_PROXIES`).
+ *    chart sets it in the ConfigMap (`config.TRUSTED_PROXIES`). Serving HTTP
+ *    in production without it throws; on the console (artisan: image build,
+ *    `config:cache`, migrations, workers) no proxy is trusted (`[]`) instead,
+ *    since there are no requests to protect.
  *
  * ## Options
  * | Key                 | Type                          | Default | Description                                                                  |
@@ -118,8 +121,14 @@ final class CommonMiddleware
 
         // No explicit value and no TRUSTED_PROXIES: refuse the insecure '*'
         // fallback in production (trusting any proxy enables X-Forwarded-* spoofing).
+        // On the console there are no HTTP requests: trust no proxy instead of
+        // failing (artisan runs at image build time without the chart's config).
         $appEnv = $_ENV['APP_ENV'] ?? getenv('APP_ENV');
         if (is_string($appEnv) && $appEnv === 'production') {
+            if (self::runningInConsole()) {
+                return [];
+            }
+
             throw new \RuntimeException(
                 'TRUSTED_PROXIES must be set explicitly in production (the CIDR Traefik connects from, e.g. the K3s '
                 .'pod CIDR such as 10.42.0.0/16). Refusing to trust all proxies ("*").'
@@ -128,5 +137,21 @@ final class CommonMiddleware
 
         // Insecure fallback for dev/Compose only.
         return '*';
+    }
+
+    /** SAPI forced by the tests (null = the real PHP_SAPI). */
+    private static ?string $sapi = null;
+
+    /**
+     * @internal Tests only: simulate a SAPI (e.g. `fpm-fcgi`) to cover the HTTP path.
+     */
+    public static function forceSapiForTesting(?string $sapi): void
+    {
+        self::$sapi = $sapi;
+    }
+
+    private static function runningInConsole(): bool
+    {
+        return in_array(self::$sapi ?? PHP_SAPI, ['cli', 'phpdbg'], true);
     }
 }

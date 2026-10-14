@@ -275,7 +275,8 @@ jobs:
           RO=(--read-only --tmpfs /tmp:uid=82,gid=82 --tmpfs /var/www/html/storage:uid=82,gid=82 --tmpfs /var/www/html/bootstrap/cache:uid=82,gid=82)
           ENV=(-e "APP_KEY=base64:$(head -c 32 /dev/urandom | base64)" -e APP_ENV=production -e CACHE_STORE=array
                -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync -e BROADCAST_CONNECTION=log -e JWT_AUDIENCE=smoke
-               -e RABBITMQ_USER=smoke -e RABBITMQ_PASSWORD=smoke -e DB_PASSWORD=smoke -e LOG_MGMT_DB_PASSWORD=smoke)
+               -e RABBITMQ_USER=smoke -e RABBITMQ_PASSWORD=smoke -e DB_PASSWORD=smoke -e LOG_MGMT_DB_PASSWORD=smoke
+               -e TRUSTED_PROXIES=10.42.0.0/16)
           docker run --rm "${RO[@]}" "${ENV[@]}" "$IMG-worker:$VERSION" worker --version | grep -q 'Laravel Framework'
           test "$(docker run --rm "$IMG-worker:$VERSION" exec id -u)" = "82"
           C=$(docker run -d --rm "${RO[@]}" "${ENV[@]}" -p 18081:8080 "$IMG-api:$VERSION")

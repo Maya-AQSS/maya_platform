@@ -99,6 +99,53 @@ it('registers trustProxies by default (fallback to * when TRUSTED_PROXIES unset)
     expect($args['at'])->toBe('*');
 });
 
+it('throws when serving HTTP in production without TRUSTED_PROXIES', function (): void {
+    $spy = makeMiddlewareSpy();
+    putenv('TRUSTED_PROXIES');
+    putenv('APP_ENV=production');
+    CommonMiddleware::forceSapiForTesting('fpm-fcgi');
+
+    try {
+        expect(fn () => CommonMiddleware::register($spy))->toThrow(RuntimeException::class, 'TRUSTED_PROXIES');
+    } finally {
+        CommonMiddleware::forceSapiForTesting(null);
+        putenv('APP_ENV');
+    }
+});
+
+it('trusts no proxy on the console in production without TRUSTED_PROXIES (artisan at build time)', function (): void {
+    $spy = makeMiddlewareSpy();
+    putenv('TRUSTED_PROXIES');
+    putenv('APP_ENV=production');
+    CommonMiddleware::forceSapiForTesting('cli');
+
+    try {
+        CommonMiddleware::register($spy);
+        expect($spy->getCallArgs('trustProxies')['at'])->toBe([]);
+    } finally {
+        CommonMiddleware::forceSapiForTesting(null);
+        putenv('APP_ENV');
+    }
+});
+
+it('uses TRUSTED_PROXIES in production when it is set, on HTTP and console alike', function (): void {
+    putenv('TRUSTED_PROXIES=10.42.0.0/16');
+    putenv('APP_ENV=production');
+
+    try {
+        foreach (['fpm-fcgi', 'cli'] as $sapi) {
+            CommonMiddleware::forceSapiForTesting($sapi);
+            $spy = makeMiddlewareSpy();
+            CommonMiddleware::register($spy);
+            expect($spy->getCallArgs('trustProxies')['at'])->toBe('10.42.0.0/16');
+        }
+    } finally {
+        CommonMiddleware::forceSapiForTesting(null);
+        putenv('APP_ENV');
+        putenv('TRUSTED_PROXIES');
+    }
+});
+
 // ─── Alias registration ───────────────────────────────────────────────────────
 
 it('does not call alias when no aliases are provided', function (): void {
