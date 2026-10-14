@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { publicConfig, useAuth } from '@ceedcv-maya/shared-auth-react'
+import { publicConfig, resolveServiceUrl, useAuth } from '@ceedcv-maya/shared-auth-react'
 
 // laravel-echo + pusher-js — importaciones dinámicas para no romper SSR/envs
 // que no tengan las variables de entorno configuradas.
@@ -41,20 +41,41 @@ export interface NotificationReverbConfig {
   key: string
   port: number
   scheme: string
-  /** Endpoint que autoriza el canal privado (`…/api/v1/broadcasting/auth` de la API de la app). */
+  /** Endpoint que autoriza el canal privado (`…/api/v1/broadcasting/auth` de dashboard-api). */
   authEndpoint: string
 }
 
 /**
- * Configuración de Reverb del provider: la pública en ejecución (`/config.js`,
- * `MAYA_PUBLIC_REVERB_*`) y, si falta, `VITE_REVERB_*` (`publicConfig` de
- * shared-auth-react). Sin host o sin clave devuelve null y el provider cae en
- * modo polling.
- *
- * `authEndpoint`: `REVERB_AUTH_ENDPOINT`; si no, `<API_URL>/broadcasting/auth`;
- * si tampoco, `/api/broadcasting/auth` (relativo, como antes).
+ * Ruta de autorización de canales de dashboard-api: `Broadcast::routes()` con
+ * prefijo `api/v1` (`RegistersFdwBootstrap` de shared-platform-laravel).
  */
-export function notificationReverbConfig(): NotificationReverbConfig | null {
+const DASHBOARD_BROADCASTING_AUTH_PATH = '/api/v1/broadcasting/auth'
+
+function parseUrl(url: string | undefined): URL | null {
+  if (!url) return null
+  try {
+    return new URL(url)
+  } catch {
+    return null // relativa o mal formada
+  }
+}
+
+/**
+ * true si la app que monta el provider es el propio dashboard: su API
+ * (`API_URL`) está en el mismo origen que dashboard-api (`DASHBOARD_API_URL`).
+ */
+function isDashboardApp(): boolean {
+  const own = parseUrl(publicConfig('API_URL'))
+  const dashboard = parseUrl(publicConfig('DASHBOARD_API_URL'))
+  return own !== null && dashboard !== null && own.origin === dashboard.origin
+}
+
+/**
+ * Reverb propio de la app (`REVERB_*`). Solo lo usa el dashboard, que es quien
+ * emite las notificaciones: en él es el mismo servidor que el del dashboard.
+ * Valores por defecto de antes: puerto 8080, http y `<API_URL>/broadcasting/auth`.
+ */
+function ownReverbConfig(): NotificationReverbConfig | null {
   const host = publicConfig('REVERB_HOST')
   const key = publicConfig('REVERB_APP_KEY')
   if (!host || !key) return null
@@ -65,6 +86,46 @@ export function notificationReverbConfig(): NotificationReverbConfig | null {
     publicConfig('REVERB_AUTH_ENDPOINT') ??
     (apiUrl ? `${apiUrl.replace(/\/+$/, '')}/broadcasting/auth` : '/api/broadcasting/auth')
   return { host, key, port, scheme, authEndpoint }
+}
+
+/**
+ * Reverb del dashboard (D37): `DASHBOARD_REVERB_APP_KEY` (obligatoria),
+ * `DASHBOARD_REVERB_HOST` (si falta, el host de `DASHBOARD_API_URL`),
+ * `DASHBOARD_REVERB_PORT` (443; 80 con http) y `DASHBOARD_REVERB_SCHEME`
+ * (https). El canal se autoriza en `<DASHBOARD_API_URL>/api/v1/broadcasting/auth`
+ * con el token de la SPA, que lleva la audiencia `maya-dashboard`.
+ *
+ * `DASHBOARD_API_URL` se resuelve como el `dashboardApiUrl` de las apps
+ * (`resolveServiceUrl(…, 'dashboard-api')`): si falta, se deriva del host actual.
+ */
+function dashboardReverbConfig(): NotificationReverbConfig | null {
+  const key = publicConfig('DASHBOARD_REVERB_APP_KEY')
+  if (!key) return null
+  const apiUrl = resolveServiceUrl(publicConfig('DASHBOARD_API_URL'), 'dashboard-api').replace(/\/+$/, '')
+  const host = publicConfig('DASHBOARD_REVERB_HOST') ?? parseUrl(apiUrl)?.hostname
+  if (!host) return null
+  const scheme = publicConfig('DASHBOARD_REVERB_SCHEME') ?? 'https'
+  const port =
+    Number.parseInt(publicConfig('DASHBOARD_REVERB_PORT') ?? '', 10) || (scheme === 'http' ? 80 : 443)
+  return { host, key, port, scheme, authEndpoint: `${apiUrl}${DASHBOARD_BROADCASTING_AUTH_PATH}` }
+}
+
+/**
+ * Configuración de Reverb de la barra lateral (D37). Las notificaciones las
+ * emite el dashboard por SU Reverb, así que todas las apps se conectan a él
+ * (`DASHBOARD_REVERB_*`) y autorizan el canal en dashboard-api. El dashboard
+ * usa su propio Reverb (`REVERB_*`, el mismo servidor) y, si le falta, también
+ * `DASHBOARD_REVERB_*`.
+ *
+ * Fuente: la configuración pública en ejecución (`/config.js`, `MAYA_PUBLIC_*`)
+ * y, si falta, `VITE_*` (`publicConfig` de shared-auth-react). Una app que no
+ * es el dashboard nunca usa su propio Reverb (por él no llega ninguna
+ * notificación). Sin configuración devuelve null y el provider se queda en la
+ * consulta periódica.
+ */
+export function notificationReverbConfig(): NotificationReverbConfig | null {
+  if (isDashboardApp()) return ownReverbConfig() ?? dashboardReverbConfig()
+  return dashboardReverbConfig()
 }
 
 /**
@@ -117,13 +178,15 @@ export interface NotificationProviderProps {
  * Provider que gestiona UNA SOLA conexión WebSocket por aplicación.
  * Todos los `useNotifications` en la misma app comparten el socket via context.
  *
- * Configuración pública (ver {@link notificationReverbConfig}): `/config.js`
- * (`MAYA_PUBLIC_*`) o, en Vite, `VITE_*`:
- *   REVERB_HOST           — host de Reverb (e.g. "api.dms.ceedcv")
- *   REVERB_APP_KEY        — app key de Reverb
- *   REVERB_PORT           — puerto (default 8080)
- *   REVERB_SCHEME         — http o https (default "http")
- *   REVERB_AUTH_ENDPOINT  — autorización del canal (default `<API_URL>/broadcasting/auth`)
+ * Se conecta al Reverb del DASHBOARD, que es quien emite las notificaciones
+ * (D37). Configuración pública (ver {@link notificationReverbConfig}):
+ * `/config.js` (`MAYA_PUBLIC_*`) o, en Vite, `VITE_*`:
+ *   DASHBOARD_REVERB_APP_KEY — clave pública del Reverb del dashboard (sin ella: polling)
+ *   DASHBOARD_REVERB_HOST    — host (default: el de DASHBOARD_API_URL, p. ej. "api.dashboard.ceedcv")
+ *   DASHBOARD_REVERB_PORT    — puerto (default 443; 80 con http)
+ *   DASHBOARD_REVERB_SCHEME  — http o https (default "https")
+ *   DASHBOARD_API_URL        — dashboard-api; el canal se autoriza en `<DASHBOARD_API_URL>/api/v1/broadcasting/auth`
+ * En el propio dashboard se usa su `REVERB_*` (el mismo servidor).
  *
  * Si la configuración no está o la conexión falla, el provider no expone canal
  * (channel = null). `wsConnected` solo pasa a true cuando Reverb confirma la
@@ -131,7 +194,8 @@ export interface NotificationProviderProps {
  * mientras tanto `useNotifications` sigue con el polling HTTP.
  *
  * El canal suscrito es `private-notifications.{userId}` usando el `sub` del
- * usuario autenticado via `useAuth()`.
+ * usuario autenticado via `useAuth()`; dashboard-api lo autoriza si coincide
+ * con el `sub` del token.
  */
 export function NotificationProvider({ children }: NotificationProviderProps) {
   let auth: ReturnType<typeof useAuth> | null = null
