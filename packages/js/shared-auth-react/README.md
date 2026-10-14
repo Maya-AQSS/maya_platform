@@ -84,6 +84,7 @@ hasRuntimeConfig()                 // true if /config.js was loaded
 | `DASHBOARD_URL`, `DASHBOARD_API_URL` | the app (`resolveServiceUrl`); without them, derived with `peerOrigin` |
 | `PEER_HOST_PATTERN` | `peerService` (`dash` / `subdomain-api`; otherwise detected from the hostname) |
 | `REVERB_APP_KEY`, `REVERB_HOST`, `REVERB_PORT`, `REVERB_SCHEME`, `REVERB_AUTH_ENDPOINT` | `bootstrapRealtime` (`@ceedcv-maya/shared-realtime-react`) |
+| `DASHBOARD_REVERB_APP_KEY`, `DASHBOARD_REVERB_HOST`, `DASHBOARD_REVERB_PORT`, `DASHBOARD_REVERB_SCHEME` | `NotificationProvider` (`@ceedcv-maya/shared-sidebar-react`): the sidebar listens to the dashboard's Reverb (D37); see its README |
 | `SESSION_COOKIE_DOMAIN` | `sessionOverrides` (optional override of the shared cookie domain) |
 | `APP_NAME` | nobody yet (set by the charts) |
 
