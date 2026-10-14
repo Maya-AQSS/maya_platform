@@ -154,7 +154,9 @@ preStop:
   Rutas escribibles con readOnlyRootFilesystem (contrato de maya/php-base):
   storage/, bootstrap/cache y /tmp como emptyDir; el entrypoint recrea la
   estructura de storage/ al arrancar. El PVC de ficheros (storage.*) se monta
-  dentro de storage/app.
+  dentro de storage/app, que entonces es un emptyDir propio: si no, el runtime
+  crea storage/app como root (para el punto de montaje del PVC) y el entrypoint
+  (uid 82) no puede crear storage/app/public (dms en el K3s de desarrollo, 14-10).
 */}}
 {{- define "maya-common.runtimeVolumes" -}}
 - name: storage
@@ -164,6 +166,8 @@ preStop:
 - name: tmp
   emptyDir: {}
 {{- if .Values.storage.enabled }}
+- name: storage-app
+  emptyDir: {}
 - name: media
   persistentVolumeClaim:
     claimName: {{ .Values.storage.existingClaim | default (printf "%s-media" (include "maya-common.fullname" .)) }}
@@ -178,6 +182,10 @@ preStop:
 - name: tmp
   mountPath: /tmp
 {{- if .Values.storage.enabled }}
+{{- if hasPrefix "/var/www/html/storage/app/" .Values.storage.mountPath }}
+- name: storage-app
+  mountPath: /var/www/html/storage/app
+{{- end }}
 - name: media
   mountPath: {{ .Values.storage.mountPath }}
   {{- with .Values.storage.subPath }}

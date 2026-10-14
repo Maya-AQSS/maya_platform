@@ -25,7 +25,7 @@ type: application
 version: 0.0.0-dev
 dependencies:
   - name: maya-common
-    version: 0.2.1
+    version: 0.2.2
     repository: oci://ghcr.io/maya-aqss/charts
 ```
 
@@ -73,11 +73,14 @@ lo incluye dentro del `.tgz`: el clúster nunca descarga `maya-common` por separ
 
 ```bash
 helm package charts/maya-common -d /tmp/chart
-helm push /tmp/chart/maya-common-0.2.1.tgz oci://ghcr.io/maya-aqss/charts
+helm push /tmp/chart/maya-common-0.2.2.tgz oci://ghcr.io/maya-aqss/charts
 ```
 
 ## Cambios
 
+- **0.2.2**: con `storage.enabled`, `storage/app` es un emptyDir propio y el PVC se monta dentro
+  (`storage/app/media`). Antes, el runtime creaba `storage/app` como root para el punto de montaje y el
+  entrypoint (uid 82) no podía crear `storage/app/public`: dms en CrashLoop (K3s de desarrollo, 14-10).
 - **0.2.1**: Job `migrate` como hook `post-install,pre-upgrade` (antes `pre-install`: en la
   primera instalación no existían su ServiceAccount ni el PVC de dms y el Job no arrancaba);
   `<componente>.imageTag`; `config.TRUSTED_PROXIES` por defecto (pod CIDR de K3s, `10.42.0.0/16`).
