@@ -7,14 +7,11 @@
  *
  * @example
  * // src/auth/oidcAdapter.ts  (en cualquier app Maya)
- * import { createOidcAdapter } from '@ceedcv-maya/shared-auth-react';
+ * import { createOidcAdapter, publicKeycloakConfig } from '@ceedcv-maya/shared-auth-react';
  *
+ * // KEYCLOAK_URL/REALM/CLIENT_ID de /config.js (MAYA_PUBLIC_*) o, en Vite, de VITE_*.
  * export const { oidcAuthService, appendBearerAuthorization, triggerSignIn } =
- *   createOidcAdapter({
- *     url: import.meta.env.VITE_KEYCLOAK_URL,
- *     realm: import.meta.env.VITE_KEYCLOAK_REALM,
- *     clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID,
- *   });
+ *   createOidcAdapter(publicKeycloakConfig());
  */
 import { AuthService } from './authService';
 import type { KeycloakConfig } from './types';
