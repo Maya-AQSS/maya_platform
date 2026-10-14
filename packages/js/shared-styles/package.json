@@ -1,6 +1,6 @@
 {
   "name": "@ceedcv-maya/shared-styles",
-  "version": "0.22.1",
+  "version": "0.22.2",
   "description": "Shared Tailwind v4 design tokens, color palette (Odoo/Maya), animations and reset CSS for the @ceedcv-maya React component packages. CSS-only \u2014 import once at app entry.",
   "license": "MIT",
   "author": {
