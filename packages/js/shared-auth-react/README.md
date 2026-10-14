@@ -53,7 +53,7 @@ So one image per version runs in every environment and is promoted by digest (D2
    <script type="module" src="/src/main.tsx"></script>
    ```
 
-   It is same-origin, so the CSP `script-src 'self'` allows it (an inline script would be blocked). `vite build` warns that it "can't be bundled without type=module": expected, the tag is kept as is. Under `vite dev` the request 404s and the `VITE_*` values apply.
+   It is same-origin, so the CSP `script-src 'self'` allows it (an inline script would be blocked). For Vite (`npm run dev`, `vite preview`) add a `frontend/public/config.js` with only comments: it does **not** define `window.__MAYA_CONFIG__`, so the `VITE_*` values apply, and it avoids a 404 and the `vite build` warning about a script without `type="module"`. In the image, nginx serves the generated `/config.js` instead of that file.
 
 2. Read every public value through the package instead of `import.meta.env`:
 

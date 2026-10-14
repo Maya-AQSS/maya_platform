@@ -7,6 +7,12 @@ name: build-app
 #   ghcr.io/maya-aqss/<app>-frontend:<versión>-dev          SPA con los VITE_* de desarrollo
 #   oci://ghcr.io/maya-aqss/charts/<app>:<versión>          chart (incluye maya-common)
 #
+# Con `runtime_config: true` (D26 R6) el frontend es UNA sola imagen, sin VITE_* de entorno:
+# la SPA lee su configuración de /config.js (MAYA_PUBLIC_* de frontend.env del chart, que
+# genera maya/web-base al arrancar) y la misma imagen sirve en desarrollo y en producción.
+# No hay variante -dev ni `frontend_dev` en los digests. La app tiene que cargar /config.js
+# en su index.html y leer la configuración con publicConfig() de @ceedcv-maya/shared-auth-react.
+#
 # Corre en runners de GitHub: sirve igual para repos públicos y privados, y el runner
 # interno no ejecuta código de los repos. La copia a la registry interna
 # (10.224.237.240:5000) y el despliegue los hace IaC (workflow dev-deploy.yml, en un
@@ -26,7 +32,8 @@ name: build-app
 #
 # Secretos (todos opcionales):
 #   VITE_REVERB_APP_KEY    clave pública de Reverb de PRODUCCIÓN (la de Vault). Sin ella,
-#                          la SPA de producción arranca sin tiempo real.
+#                          la SPA de producción arranca sin tiempo real. Con runtime_config
+#                          no se usa: la clave llega en MAYA_PUBLIC_REVERB_APP_KEY.
 #   COMPOSER_AUTH          auth.json si algún paquete viene de un repo privado.
 #
 # Despliegue en desarrollo: el job deploy-dev usa el environment `maya-dev-dispatch` del
@@ -73,12 +80,17 @@ on:
         type: string
         default: "10.224.237.230.nip.io"
       dev_variant:
-        description: "Construir también el frontend -dev (VITE_* de desarrollo)."
+        description: "Construir también el frontend -dev (VITE_* de desarrollo). Sin efecto con runtime_config."
         required: false
         type: boolean
         default: true
+      runtime_config:
+        description: "Una sola imagen de frontend sin VITE_* de entorno: la SPA lee /config.js (D26 R6)."
+        required: false
+        type: boolean
+        default: false
       vite_args_extra:
-        description: "VITE_* propios de la app (CLAVE=valor, una por línea), para las dos variantes."
+        description: "VITE_* propios de la app (CLAVE=valor, una por línea), para todas las variantes. Con runtime_config, solo valores que no dependan del entorno."
         required: false
         type: string
         default: ""
@@ -118,6 +130,9 @@ jobs:
       digests: ${{ steps.digests.outputs.digests }}
     env:
       INPUT_APP: ${{ inputs.app }}
+      RUNTIME_CONFIG: ${{ inputs.runtime_config }}
+      # Variante -dev del frontend: solo sin configuración en ejecución.
+      FRONTEND_DEV: ${{ inputs.dev_variant && !inputs.runtime_config }}
     steps:
       - uses: actions/checkout@v4
 
@@ -200,15 +215,15 @@ jobs:
               -t "$IMG-$t:$VERSION" -t "$IMG-$t:$SHA_TAG" backend
           done
 
-      # TRANSITORIO: mientras la SPA lea import.meta.env en vez de /config.js, cada entorno
-      # necesita su frontend con sus VITE_*. Hosts: los de maya-common (<slug> / api.<slug>
-      # en producción; dev-<slug> / dev-<slug>-api en desarrollo, patrón que ya entiende
-      # peerOrigin de @ceedcv-maya 0.20).
-      - name: Build frontend (producción y desarrollo)
+      # Con runtime_config: una imagen sin VITE_* de entorno (la configuración llega por
+      # /config.js). TRANSITORIO (runtime_config: false): mientras la SPA lea import.meta.env
+      # en vez de /config.js, cada entorno necesita su frontend con sus VITE_*. Hosts: los de
+      # maya-common (<slug> / api.<slug> en producción; dev-<slug> / dev-<slug>-api en
+      # desarrollo, patrón que ya entiende peerOrigin de @ceedcv-maya 0.20).
+      - name: Build frontend
         env:
           PROD_DOMAIN: ${{ inputs.prod_domain }}
           DEV_DOMAIN: ${{ inputs.dev_domain }}
-          DEV_VARIANT: ${{ inputs.dev_variant }}
           VITE_ARGS_EXTRA: ${{ inputs.vite_args_extra }}
           PROD_REVERB_KEY: ${{ secrets.VITE_REVERB_APP_KEY }}
         run: |
@@ -228,6 +243,11 @@ jobs:
               --build-arg "MAYA_WEB_BASE=$REGISTRY/${{ inputs.web_base }}" \
               -t "$tag" frontend
           }
+          if [ "$RUNTIME_CONFIG" = true ]; then
+            build_frontend "$IMG-frontend:$VERSION"
+            docker tag "$IMG-frontend:$VERSION" "$IMG-frontend:$SHA_TAG"
+            exit 0
+          fi
           build_frontend "$IMG-frontend:$VERSION" \
             "VITE_API_URL=https://api.$SLUG.$PROD_DOMAIN/api/v1" \
             "VITE_KEYCLOAK_URL=https://keycloak.$PROD_DOMAIN" \
@@ -236,7 +256,7 @@ jobs:
             "VITE_DASHBOARD_URL=https://dashboard.$PROD_DOMAIN" \
             "VITE_DASHBOARD_API_URL=https://api.dashboard.$PROD_DOMAIN"
           docker tag "$IMG-frontend:$VERSION" "$IMG-frontend:$SHA_TAG"
-          if [ "$DEV_VARIANT" = true ]; then
+          if [ "$FRONTEND_DEV" = true ]; then
             # La clave de Reverb de desarrollo es pública y fija: dev-<slug>-key (IaC dev/).
             build_frontend "$IMG-frontend:$VERSION-dev" \
               "VITE_API_URL=https://dev-$SLUG-api.$DEV_DOMAIN/api/v1" \
@@ -263,10 +283,20 @@ jobs:
           curl -fsS http://127.0.0.1:18081/api/v1/health/live | grep -q '"ok"' || { docker logs "$C"; docker stop "$C"; exit 1; }
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/.env)" != 200
           docker stop -t 5 "$C" >/dev/null
-          for tag in "$VERSION" $([ "${{ inputs.dev_variant }}" = true ] && echo "$VERSION-dev"); do
-            F=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18082:8080 "$IMG-frontend:$tag")
+          # Con runtime_config, además: el index.html carga /config.js y el contenedor lo
+          # genera con las MAYA_PUBLIC_* que recibe (valor de prueba, no de ningún entorno).
+          SMOKE_ENV=()
+          if [ "$RUNTIME_CONFIG" = true ]; then SMOKE_ENV=(-e MAYA_PUBLIC_SMOKE=smoke-ok); fi
+          for tag in "$VERSION" $([ "$FRONTEND_DEV" = true ] && echo "$VERSION-dev"); do
+            F=$(docker run -d --rm --read-only --tmpfs /tmp:uid=101,gid=101 -p 18082:8080 "${SMOKE_ENV[@]}" "$IMG-frontend:$tag")
             for _ in $(seq 1 20); do curl -fsS http://127.0.0.1:18082/healthz >/dev/null 2>&1 && break; sleep 1; done
             curl -fsS http://127.0.0.1:18082/ | grep -q '/assets/'
+            if [ "$RUNTIME_CONFIG" = true ]; then
+              curl -fsS http://127.0.0.1:18082/ | grep -Eq '<script[^>]+src="/config\.js"' \
+                || { echo "::error::runtime_config: frontend/index.html no carga /config.js"; docker stop -t 3 "$F" >/dev/null; exit 1; }
+              curl -fsS http://127.0.0.1:18082/config.js | grep -q '"SMOKE": "smoke-ok"' \
+                || { echo "::error::/config.js no trae las MAYA_PUBLIC_* (¿imagen base sin configuración en ejecución?)"; docker stop -t 3 "$F" >/dev/null; exit 1; }
+            fi
             docker stop -t 3 "$F" >/dev/null
           done
 
@@ -277,7 +307,7 @@ jobs:
             docker push "$IMG-$t:$VERSION"
             docker push "$IMG-$t:$SHA_TAG"
           done
-          if [ "${{ inputs.dev_variant }}" = true ]; then docker push "$IMG-frontend:$VERSION-dev"; fi
+          if [ "$FRONTEND_DEV" = true ]; then docker push "$IMG-frontend:$VERSION-dev"; fi
 
       - name: Package & push del chart Helm (OCI)
         if: inputs.chart_path != ''
@@ -306,7 +336,7 @@ jobs:
             --arg worker "$(d "$IMG-worker:$VERSION" "$IMG-worker")" \
             --arg reverb "$(d "$IMG-reverb:$VERSION" "$IMG-reverb")" \
             --arg frontend "$(d "$IMG-frontend:$VERSION" "$IMG-frontend")" \
-            --arg frontend_dev "$([ "${{ inputs.dev_variant }}" = true ] && d "$IMG-frontend:$VERSION-dev" "$IMG-frontend")" \
+            --arg frontend_dev "$([ "$FRONTEND_DEV" = true ] && d "$IMG-frontend:$VERSION-dev" "$IMG-frontend")" \
             --arg chart "${CHART_DIGEST:-}" \
             '{api:$api, worker:$worker, reverb:$reverb, frontend:$frontend, frontend_dev:$frontend_dev, chart:$chart} | with_entries(select(.value != ""))')
           echo "$json" | jq .
@@ -318,13 +348,17 @@ jobs:
           {
             echo "## $APP $VERSION"
             echo
+            if [ "$RUNTIME_CONFIG" = true ]; then
+              echo "Frontend único para todos los entornos: configuración en \`/config.js\` (\`MAYA_PUBLIC_*\`)."
+              echo
+            fi
             echo "| Artefacto | Referencia | Digest |"
             echo "|---|---|---|"
             for t in api worker reverb frontend; do
               D=$(docker image inspect "$IMG-$t:$VERSION" --format '{{index .RepoDigests 0}}' 2>/dev/null | sed 's/.*@//')
               echo "| $t | \`$IMG-$t:$VERSION\` | \`${D:-—}\` |"
             done
-            [ "${{ inputs.dev_variant }}" = true ] && echo "| frontend (dev) | \`$IMG-frontend:$VERSION-dev\` | |"
+            [ "$FRONTEND_DEV" = true ] && echo "| frontend (dev) | \`$IMG-frontend:$VERSION-dev\` | |"
             [ -n "${CHART:-}" ] && echo "| chart | \`oci://$REGISTRY/charts/$CHART:$VERSION\` | |"
           } >> "$GITHUB_STEP_SUMMARY"
 
