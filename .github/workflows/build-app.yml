@@ -92,8 +92,9 @@ on:
         required: false
       COMPOSER_AUTH:
         required: false
-      # Declarados para poder leerlos en deploy-dev, pero los llamadores NO los pasan: en un
-      # job con `environment`, GitHub usa el secreto del environment (maya-dev-dispatch).
+      # Solo existen en el environment maya-dev-dispatch de cada app. El llamador los pasa por nombre
+      # (MAYA_DISPATCH_APP_ID: ${{ secrets.MAYA_DISPATCH_APP_ID }}) y GitHub los resuelve en el job
+      # deploy-dev, que declara ese environment; si no los pasa, llegan vacíos y sin error.
       MAYA_DISPATCH_APP_ID:
         required: false
       MAYA_DISPATCH_APP_KEY:
