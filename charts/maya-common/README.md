@@ -11,6 +11,7 @@ partir de sus **4 imágenes** (`<app>-api`, `<app>-worker`, `<app>-reverb`,
 | Deployment `scheduler` | `*-worker` `["scheduler"]` | 1 réplica; `scheduler.enabled` |
 | Deployment `reverb` | `*-reverb` `["reverb"]` | WebSocket en 8080; `REVERB_HOST` de los backends = Service interno |
 | Deployment `frontend` | `*-frontend` | nginx uid 101; ConfigMap propio con `MAYA_PUBLIC_*` (→ `/config.js`) y `MAYA_CSP` |
+| Job `views` | `*-worker` `["artisan", "maya:views"]` | `views.enabled`. Vistas de lectura de la app en `maya_apps` de `maya_erp` (D17), como el rol `maya_apps_views`; hook post-install/pre-upgrade antes de `migrate` (peso -10), con su NetworkPolicy (hook) hacia el PostgreSQL de Odoo. Único pod con `views.passwordKey` |
 | Job `migrate` | `*-worker` `["migrate"]` | hook post-install/pre-upgrade (la SA y el PVC existen ya en el primer install); configuración inline. Sin `helm install --wait`: esperar con `kubectl rollout status` |
 | ConfigMap, Services, Ingress ×2, PVC, PDB ×2, NetworkPolicy, ServiceAccount | | |
 
@@ -25,7 +26,7 @@ type: application
 version: 0.0.0-dev
 dependencies:
   - name: maya-common
-    version: 0.2.2
+    version: 0.3.0
     repository: oci://ghcr.io/maya-aqss/charts
 ```
 
@@ -49,6 +50,7 @@ app, así el `values.yaml` de cada app solo contiene lo que cambia (imagen,
 | `frontend.env` | `MAYA_PUBLIC_*` (configuración en ejecución de la SPA) y `MAYA_CSP`. |
 | `ingress.host`, `ingress.apiHost` | `<app>.ceedcv.es` (SPA) y `api.<app>.ceedcv.es` (API; `/app` → Reverb). |
 | `worker.args`, `scheduler.enabled`, `reverb.enabled`, `migrate.args` | Procesos. |
+| `views.enabled`, `views.passwordKey`, `views.networkPolicy.cidrs` | Job `views` (D17). Con Vault, `passwordKey` (`MAYA_APPS_VIEWS_PASSWORD`) tiene que estar en `vault.keys` (si no, el chart no se renderiza) y solo la recibe ese Job. `cidrs` vacío = los de `networkPolicy.egress.cidrs`. |
 | `storage.*` | PVC RWX (maya-nfs) montado en `storage/app/media` con `subPath`. |
 | `networkPolicy.egress.{cidrs,namespaces,internet}` | Deny-all por defecto; se abre solo lo listado (PostgreSQL, Redis, RabbitMQ, Keycloak, Vault, DNS). |
 
@@ -62,6 +64,9 @@ tiene defaults razonables en `values.yaml`.
    `<app>` en `auth/kubernetes` atado a la SA `<app>` del namespace `<ns>` con una política
    de solo lectura sobre `secret/data/<app>`.
 3. PostgreSQL: base de datos, rol y extensiones de la app; rol lector `maya_fdw_reader` para los FDW.
+   Con `views.enabled`: esquema `maya_apps` en `maya_erp` y el rol `maya_apps_views` que crea vistas
+   en él (playbook `05.5`, etiqueta `maya_apps`; `dev/sql` en desarrollo), y su contraseña en
+   `secret/<app>` como `MAYA_APPS_VIEWS_PASSWORD`.
 4. RabbitMQ: vhost `/maya`, usuario de la app y topología `maya.*`.
 5. DNS `<app>` y `api.<app>` → VIP de Traefik; `ClusterIssuer maya-internal-ca`.
 
@@ -73,11 +78,16 @@ lo incluye dentro del `.tgz`: el clúster nunca descarga `maya-common` por separ
 
 ```bash
 helm package charts/maya-common -d /tmp/chart
-helm push /tmp/chart/maya-common-0.2.2.tgz oci://ghcr.io/maya-aqss/charts
+helm push /tmp/chart/maya-common-0.3.0.tgz oci://ghcr.io/maya-aqss/charts
 ```
 
 ## Cambios
 
+- **0.3.0** (contrato de values nuevo, `views.*`): Job `views` (D17) con `php artisan maya:views` antes de
+  `migrate` y su NetworkPolicy, ambos hooks `post-install,pre-upgrade` (no `pre-install`: la
+  ServiceAccount del Vault Agent no existe todavía en el primer install, como `migrate` en 0.2.1).
+  `views.passwordKey` sale de las anotaciones de Vault de los demás pods. Necesita
+  shared-platform-laravel con `maya:views` (maya_platform ≥ 0.23).
 - **0.2.2**: con `storage.enabled`, `storage/app` es un emptyDir propio y el PVC se monta dentro
   (`storage/app/media`). Antes, el runtime creaba `storage/app` como root para el punto de montaje y el
   entrypoint (uid 82) no podía crear `storage/app/public`: dms en CrashLoop (K3s de desarrollo, 14-10).
