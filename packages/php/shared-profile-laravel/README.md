@@ -24,8 +24,12 @@ return [
 
 The Keycloak user id (the JWT `sub`) is stored in Odoo as **`res_users.oauth_uid`** (set by Odoo's Keycloak login and by user-worker). It is the only link key, in every environment. The old `res_users.keycloak_user_id` column only existed in development databases and is no longer read.
 
-- `Migrations::academicAssignments()`: `user_study_types`, `user_studies` and `user_course_modules` join `res_users` by `oauth_uid` (`user_id` = `sub`). Migration `2026_10_14_000001_link_academic_assignments_by_oauth_uid` redefines the shared foreign table `res_users_kc_fdw` and the three views on databases where the older migrations already ran; on a fresh install it runs after them with the same result. Apps only need `php artisan migrate`.
-- `Migrations::users()`: the local `users` view reads the remote view `v_app_users`, which lives in Odoo's database (not in this package). Its `id` column must be `res_users.oauth_uid`.
+- `Migrations::academicAssignments()`: `user_study_types`, `user_studies` and `user_course_modules` (`user_id` = `sub`). Since `2026_10_15_000001_read_academic_assignments_from_maya_apps` they read the views `maya_apps.v_app_user_*`, which already resolve the user by `oauth_uid` on Odoo's side; the older foreign tables on Odoo tables (`res_users_kc_fdw`…) are dropped. Apps only need `php artisan migrate`.
+- `Migrations::users()`: the local `users` view reads `maya_apps.v_app_users` (`id` = `res_users.oauth_uid`).
+
+## Odoo is read through `maya_apps` views only (D17)
+
+Every foreign table towards Odoo (`odoo_server`) reads a view of the `maya_apps` schema in `maya_erp`, never an Odoo table: the FDW user (`maya_fdw_reader`) can only read that schema. The common views live in `ceedcv-maya/shared-platform-laravel` (`database/views`) and each app's deployment creates them with `php artisan maya:views` (see its README). The `2026_10_15_000001_*` migrations of each group repoint the foreign tables (`users`, `teams`, `academic-catalogs`, `languages`: `ALTER FOREIGN TABLE … OPTIONS (SET schema_name 'maya_apps', SET table_name …)` with the same columns; `academic-assignments`: new foreign tables). Deploy them together with the views job (maya-common ≥ 0.3.0, `views.enabled: true`): without the views, the foreign tables fail when queried.
 
 
 ## TypeScript / build notes
