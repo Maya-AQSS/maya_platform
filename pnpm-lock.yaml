@@ -192,7 +192,7 @@ importers:
   packages/js/shared-i18n-react:
     dependencies:
       '@ceedcv-maya/shared-auth-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-auth-react
     devDependencies:
       '@types/react':
@@ -223,22 +223,22 @@ importers:
   packages/js/shared-layout-react:
     dependencies:
       '@ceedcv-maya/shared-auth-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-auth-react
       '@ceedcv-maya/shared-i18n-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-i18n-react
       '@ceedcv-maya/shared-profile-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-profile-react
       '@ceedcv-maya/shared-realtime-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-realtime-react
       '@ceedcv-maya/shared-sidebar-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-sidebar-react
       '@ceedcv-maya/shared-ui-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-ui-react
     devDependencies:
       '@tanstack/react-query':
@@ -281,10 +281,10 @@ importers:
   packages/js/shared-profile-react:
     dependencies:
       '@ceedcv-maya/shared-auth-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-auth-react
       '@ceedcv-maya/shared-ui-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-ui-react
     devDependencies:
       '@testing-library/react':
@@ -345,13 +345,13 @@ importers:
   packages/js/shared-sidebar-react:
     dependencies:
       '@ceedcv-maya/shared-auth-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-auth-react
       '@ceedcv-maya/shared-editor-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-editor-react
       '@ceedcv-maya/shared-layout-react':
-        specifier: ^0.22.2
+        specifier: ^0.23.0
         version: link:../shared-layout-react
       laravel-echo:
         specifier: ^1.16.1
