@@ -23,6 +23,8 @@
 ---
 {{ include "maya-common.pvc" $root }}
 ---
+{{ include "maya-common.jobViews" $root }}
+---
 {{ include "maya-common.jobMigrate" $root }}
 ---
 {{ include "maya-common.api" $root }}

@@ -89,8 +89,17 @@ app.kubernetes.io/component: {{ .component }}
   Anotaciones del Vault Agent Injector. Renderiza /vault/secrets/config con
   `export CLAVE="valor"` por cada clave; el entrypoint de la imagen lo carga.
   pre-populate-only: solo init container (sin sidecar), así los Jobs terminan.
+
+  Todos los pods reciben vault.keys salvo views.passwordKey (contraseña del rol maya_apps_views,
+  D17), que solo recibe el Job views (maya-common.vaultAnnotationsWithKeys con todas las claves).
 */}}
 {{- define "maya-common.vaultAnnotations" -}}
+{{- include "maya-common.vaultAnnotationsWithKeys" (dict "root" . "keys" (without .Values.vault.keys .Values.views.passwordKey)) -}}
+{{- end -}}
+
+{{/* Uso: (dict "root" . "keys" (list "APP_KEY" …)) */}}
+{{- define "maya-common.vaultAnnotationsWithKeys" -}}
+{{- with .root }}
 {{- if .Values.vault.enabled }}
 vault.hashicorp.com/agent-inject: "true"
 vault.hashicorp.com/agent-pre-populate-only: "true"
@@ -107,10 +116,11 @@ vault.hashicorp.com/agent-limits-mem: {{ .limits.memory | quote }}
 {{- end }}
 vault.hashicorp.com/agent-inject-template-config: |
 {{ printf "  {{- with secret %s -}}" (include "maya-common.vaultSecretPath" . | quote) }}
-{{- range .Values.vault.keys }}
+{{- range $.keys }}
 {{ printf "  export %s=\"{{ .Data.data.%s }}\"" . . }}
 {{- end }}
 {{ printf "  {{- end -}}" }}
+{{- end }}
 {{- end }}
 {{- end -}}
 

@@ -35,7 +35,10 @@ final class Migrations
 {
     /**
      * Catálogo canónico de usuarios federado desde Odoo:
-     *  - vista local `users` (proyectada de `odoo.public.v_app_users` vía FDW).
+     *  - vista local `users` (proyectada de `maya_apps.v_app_users` de maya_erp vía FDW).
+     *
+     * Odoo solo se lee por vistas del esquema `maya_apps` (D17), que crea el despliegue de cada
+     * app con `php artisan maya:views` (shared-platform-laravel); lo mismo en los demás grupos.
      *
      * Tabla física en testing, FDW + vista pass-through en local/staging/prod.
      * Fuente read-only: ninguna app del ecosistema escribe en estas filas.
@@ -52,7 +55,8 @@ final class Migrations
      *  - `user_course_modules`
      *
      * `user_id` es el `sub` de Keycloak, que en Odoo es `res_users.oauth_uid` (D26 R4);
-     * desde 2026_10_14_000001, no `keycloak_user_id` (no existe en producción).
+     * desde 2026_10_14_000001, no `keycloak_user_id` (no existe en producción). Desde
+     * 2026_10_15_000001 leen `maya_apps.v_app_user_*`, que ya resuelven el usuario en Odoo.
      *
      * Tablas en testing, source+FDW+vista en local, FDW remoto en prod.
      */
@@ -76,6 +80,9 @@ final class Migrations
      *                       `maya_core_study_maya_core_subject_rel`. El id es
      *                       compuesto `{study_id}_{subject_id}` y matchea con
      *                       `user_course_modules.module_id`.
+     *
+     * Desde 2026_10_15_000001 las tablas foráneas leen las vistas `maya_apps.v_app_study_types`,
+     * `v_app_studies`, `v_app_subjects` y `v_app_study_subjects` (mismas columnas).
      *
      * El catálogo de `teams` ya está cubierto por la migración existente
      * en `teams/`.

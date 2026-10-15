@@ -63,8 +63,11 @@ beforeEach(function (): void {
 it('runs after the migrations it fixes (000003-000005)', function (): void {
     $files = array_map('basename', glob(OAUTH_UID_MIGRATIONS_DIR.'/*.php'));
     sort($files);
+    $position = array_search(OAUTH_UID_MIGRATION, $files, true);
 
-    expect(end($files))->toBe(OAUTH_UID_MIGRATION);
+    foreach (array_filter($files, fn (string $f) => str_starts_with($f, '2026_05_18_')) as $older) {
+        expect(array_search($older, $files, true))->toBeLessThan($position);
+    }
 });
 
 it('is a no-op in the testing environment (physical tables with user_id)', function (): void {

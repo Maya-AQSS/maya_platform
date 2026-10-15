@@ -89,6 +89,47 @@ Permisos que recibe cada servicio (los deriva el generador):
 - Payloads: contrato en `rabbitmq-contracts.md`. Un cambio incompatible sube
   `x-maya-schema-version` y convive con la versión anterior mientras haya consumidores antiguos.
 
+### 5.1 Adjuntos por referencia (`metadata.attachments[]`)
+
+Una notificación puede pedir que su correo lleve ficheros **sin meterlos en el mensaje**: van como
+referencias en `metadata.attachments`. Es un campo **opcional** y compatible: quien no lo conoce lo
+ignora, así que no cambia `x-maya-schema-version` (sigue en `1`).
+
+| Campo | Tipo | Regla |
+|---|---|---|
+| `source` | texto | Sistema que guarda el fichero. Hoy solo `odoo` |
+| `model` | texto | Modelo que guarda el contenido. Con `odoo`: `ir.attachment` |
+| `id` | entero > 0 | Identificador del fichero en ese modelo |
+| `name` | texto no vacío | Nombre del fichero en el correo |
+| `mimetype` | texto no vacío | Tipo MIME (`application/pdf`…) |
+| `size` | entero ≥ 0 | Tamaño en bytes |
+| `sha256` | texto | SHA-256 del contenido: 64 caracteres hexadecimales en minúsculas |
+
+```json
+"metadata": {
+  "attachments": [
+    {"source": "odoo", "model": "ir.attachment", "id": 4211, "name": "lote-firmado.pdf",
+     "mimetype": "application/pdf", "size": 48213,
+     "sha256": "3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b"}
+  ]
+}
+```
+
+- **El fichero nunca viaja en el mensaje** (tampoco en base64): RabbitMQ no es un almacén de
+  ficheros y un mensaje grande retiene a toda la cola.
+- Solo actúa en el canal `email` (cola `notifications.email`, consumidor n8n). `notifications.ingest`
+  (dashboard) guarda `metadata` tal cual y no descarga nada.
+- El emisor calcula `size` y `sha256` al publicar. En Odoo: `maya_core.messaging._attachment_refs`
+  (registros de `ir.attachment`) y `_field_attachment_refs` (campo `Binary` con `attachment=True`).
+- El consumidor descarga cada fichero con **su propia credencial de servicio**, de solo lectura (n8n:
+  usuario de servicio de Odoo, credencial «Odoo adjuntos», `POST /json/2/ir.attachment/read` en
+  `odoo-maya-app.maya-erp.svc.cluster.local:8069`), comprueba el `sha256` y adjunta el fichero. El
+  mensaje no lleva credenciales ni enlaces firmados: quién puede leer qué lo decide Odoo.
+- Límites: como mucho **10 adjuntos** y **15 MiB** en total (al codificarse en el correo crecen un
+  37 %; Gmail admite 25 MB).
+- Si algo falla (referencia mal formada, fichero que no existe o no se puede leer, `sha256` distinto,
+  límites superados), **no se envía el correo** y el mensaje acaba en `dlq.notifications.email`.
+
 ## 6. Cómo crecer
 
 **App nueva** (desde `maya_template`):

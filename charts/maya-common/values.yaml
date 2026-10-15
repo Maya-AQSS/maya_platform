@@ -215,6 +215,28 @@ migrate:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: 500m, memory: 512Mi }
 
+# ─── views: vistas de lectura en maya_apps de maya_erp (D17; imagen *-worker) ─
+# `php artisan maya:views` (shared-platform-laravel): las vistas comunes de maya_platform y las
+# de la app (database/views/*.sql), en una transacción, como el rol maya_apps_views. Hook
+# post-install/pre-upgrade con peso menor que migrate (corre antes que él en cada fase). Solo
+# este Job recibe passwordKey: los demás pods se renderizan sin esa clave de vault.keys.
+views:
+  enabled: false
+  args: ["artisan", "maya:views"]
+  # Clave de vault.keys (o del Secret externo) con la contraseña de maya_apps_views. Host, puerto
+  # y BD: FDW_ODOO_HOST/PORT/DATABASE de config (o MAYA_APPS_DB_*).
+  passwordKey: MAYA_APPS_VIEWS_PASSWORD
+  backoffLimit: 1
+  activeDeadlineSeconds: 300
+  hookWeight: "-10"
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  networkPolicy:
+    # Salida del Job hacia el PostgreSQL de Odoo: [{ cidr: 10.224.237.252/32, ports: [5432] }].
+    # Vacío = los de networkPolicy.egress.cidrs (Odoo y las apps comparten PostgreSQL).
+    cidrs: []
+
 # ─── storage: PVC RWX para ficheros de la app (dms) ───────────────────────────
 storage:
   enabled: false

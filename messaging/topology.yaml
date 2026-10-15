@@ -97,3 +97,7 @@ services:
   n8n:
     kind: service
     publishes: []
+  # Odoo (maya_core, support/amqp.py): errores de negocio, auditoría y notificaciones. No consume colas.
+  odoo:
+    kind: service
+    publishes: [maya.audit, maya.logs, maya.notifications]
