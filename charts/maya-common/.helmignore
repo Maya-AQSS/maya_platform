@@ -16,3 +16,5 @@
 .idea/
 *.tmproj
 .vscode/
+# Pruebas del chart (no van en el paquete)
+tests/
