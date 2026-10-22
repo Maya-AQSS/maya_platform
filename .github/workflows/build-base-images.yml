@@ -16,8 +16,6 @@ on:
   push:
     branches:
       - main
-      # TRANSITORIO (plan-dev-k3s): hasta fusionar en main, publicar desde la rama del plan.
-      - plan-dev-k3s
     paths:
       - "docker/**"
       - "charts/maya-common/**"
